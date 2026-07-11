@@ -54,6 +54,7 @@ class Asset:
 DEFAULT_CHECKPOINT = "data/performance/transformer_multiple_12_PAPYRUS_200_16_3.pkg"
 
 ASSETS: list[Asset] = [
+    Asset("rawdata/PAPYRUS.csv", _zenodo_url("Papyrus05.5_ALL.smi"), "82d583a5d1a7c5d7648fc95db35ca3d5"),
     Asset("rawdata/gbd_8.csv", _zenodo_url("gbd_8.csv"), "e82cf958f1d22f5b3c0d096aab13b449"),
     Asset("data/selective_ki.csv", _zenodo_url("selective_ki.csv"), "d3998addd8e4472b8d40f231921eda38"),
     Asset("generated/rnn.tsv", _zenodo_url("rnn.tsv"), "8a8a23c4f227379315cc92a614a83048"),

@@ -7,6 +7,7 @@ __pycache__/
 
 # Downloaded via `uncorrupt-smiles fetch-data` (see src/uncorrupt_smiles/fetch_data.py) -
 # not committed to keep the repo small. Run fetch-data to restore them locally.
+/rawdata/PAPYRUS.csv
 /rawdata/gbd_8.csv
 /data/selective_ki.csv
 /generated/rnn.tsv
