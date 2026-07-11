@@ -194,7 +194,7 @@ standardize_stream(
 #### 🧪 Generate errors
 
 ```python
-from uncorrupt_smiles.invalidSMILES import generate_errors, reservoir_sample_fragments, write_errors_split
+from uncorrupt_smiles.invalid_smiles import generate_errors, reservoir_sample_fragments, write_errors_split
 
 # stream straight to train/dev CSVs
 write_errors_split(
@@ -242,7 +242,7 @@ keyword arguments for a full-scale run on more powerful hardware. Use
 | `src/uncorrupt_smiles/uncorrupt.py` | `Uncorrupt` — the main entrypoint. Wraps `Seq2Seq.load_checkpoint`, defaulting to the bundled pretrained checkpoint (downloaded on demand). |
 | `src/uncorrupt_smiles/transformer.py` | The `Seq2Seq` model. Fixing SMILES (`fix_smiles`/`fix_smiles_csv`), training, evaluation, and checkpoint save/load are all methods on the model itself; `src_vocab`/`trg_vocab` are attached to the model, not passed around separately. |
 | `src/uncorrupt_smiles/fetch_data.py` | Downloads example datasets / the pretrained checkpoint on demand. |
-| `src/uncorrupt_smiles/invalidSMILES.py` | Per-SMILES error functions (`exists_error`, `par_error`, `permutation`, `ring_error`, `syntax_error`, `valence_error`, `arom_error`, `introduce_error`) plus streaming orchestration (`generate_errors`, `write_errors_split`, `reservoir_sample_fragments`). |
+| `src/uncorrupt_smiles/invalid_smiles.py` | Per-SMILES error functions (`exists_error`, `par_error`, `permutation`, `ring_error`, `syntax_error`, `valence_error`, `arom_error`, `introduce_error`) plus streaming orchestration (`generate_errors`, `write_errors_split`, `reservoir_sample_fragments`). |
 | `src/uncorrupt_smiles/preprocess.py` | `standardize_smiles` / `standardize_stream`. |
 | `src/uncorrupt_smiles/vocab.py` | `Vocab` — character-level vocabulary, built by streaming. |
 | `src/uncorrupt_smiles/data.py` | Streaming CSV helpers and the training `IterableDataset`. |

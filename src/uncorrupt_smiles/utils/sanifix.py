@@ -1,5 +1,5 @@
 """Sanifix4 by James Davidson - fixes aromatic nitrogen perception RDKit sometimes gets wrong
-(e.g. O=c1ccncc1). Used by invalidSMILES.arom_error."""
+(e.g. O=c1ccncc1). Used by invalid_smiles.arom_error."""
 from rdkit import Chem
 
 

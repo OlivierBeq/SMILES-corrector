@@ -4,7 +4,7 @@ import random
 import pytest
 from rdkit import Chem
 
-from uncorrupt_smiles.invalidSMILES import (
+from uncorrupt_smiles.invalid_smiles import (
     INVALID_TYPES,
     build_seed_vocab,
     generate_errors,

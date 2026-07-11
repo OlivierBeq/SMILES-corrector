@@ -40,7 +40,7 @@ def fragment_csv(tmp_path):
 
 @pytest.fixture
 def errors_csv_pair(tmp_path, std_csv, fragment_csv):
-    from uncorrupt_smiles.invalidSMILES import write_errors_split
+    from uncorrupt_smiles.invalid_smiles import write_errors_split
 
     train_csv = str(tmp_path / "err_train.csv")
     dev_csv = str(tmp_path / "err_dev.csv")

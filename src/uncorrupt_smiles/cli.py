@@ -11,7 +11,7 @@ import torch
 
 from uncorrupt_smiles.data import iter_csv_column, make_loader
 from uncorrupt_smiles.fetch_data import fetch_all
-from uncorrupt_smiles.invalidSMILES import INVALID_TYPES, write_errors_split
+from uncorrupt_smiles.invalid_smiles import INVALID_TYPES, write_errors_split
 from uncorrupt_smiles.preprocess import standardize_stream
 from uncorrupt_smiles.transformer import Seq2Seq
 from uncorrupt_smiles.vocab import Vocab
