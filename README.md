@@ -3,6 +3,12 @@
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
+This project implements the approach described in:
+
+> Schoenmaker, L., Béquignon, O.J.M., Jespers, W. & Gerard J.P. van Westen<br/>
+> UnCorrupt SMILES: a novel approach to de novo design.<br/>
+> *Journal of Cheminformatics* **15**, 22 (2023). https://doi.org/10.1186/s13321-023-00696-x
+
 **uncorrupt-smiles fixes broken SMILES.** Give it a trained checkpoint and a SMILES string (or a
 CSV of them), and it hands back a valid molecule — from the CLI or from Python, one string or a
 streamed million-row file.
