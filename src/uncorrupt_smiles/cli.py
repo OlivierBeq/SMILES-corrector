@@ -18,12 +18,27 @@ from uncorrupt_smiles.vocab import Vocab
 
 
 def resolve_device(device: str | None) -> str:
+    """Resolves the compute device to run on.
+
+    :param device: Explicit device string (e.g. ``"cpu"``, ``"cuda"``), or
+        ``None`` to auto-detect.
+    :return: `device` if given, otherwise ``"cuda"`` if available else
+        ``"cpu"``.
+    """
     if device is not None:
         return device
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def cmd_standardize(args: argparse.Namespace) -> None:
+    """Runs the ``standardize`` subcommand: canonicalizes SMILES via RDKit.
+
+    :param args: Parsed ``standardize`` arguments; must provide
+        ``input_csv`` (SMILES to canonicalize), ``smiles_col``,
+        ``output_csv`` (destination for canonicalized SMILES), ``threshold``
+        (max token length, rows above it are dropped) and ``separator``.
+    :return: None
+    """
     standardize_stream(
         args.input_csv, args.smiles_col, args.output_csv,
         length_threshold=args.threshold, separator=args.separator,
@@ -32,6 +47,18 @@ def cmd_standardize(args: argparse.Namespace) -> None:
 
 
 def cmd_generate_errors(args: argparse.Namespace) -> None:
+    """Runs the ``generate-errors`` subcommand: builds synthetic
+    invalid/valid SMILES pairs and writes a train/dev split.
+
+    :param args: Parsed ``generate-errors`` arguments; must provide
+        ``input_csv``/``smiles_col`` (standardized SMILES to corrupt),
+        ``fragment_csv``/``fragment_col`` (fragment pool used to build
+        corruptions), ``train_csv``/``dev_csv`` (destinations for the
+        resulting split), ``seed``, ``invalid_type``, ``num_errors``,
+        ``fragment_pool_size``, ``threshold`` (max SMILES token length) and
+        ``frac_train`` (train/dev split fraction).
+    :return: None
+    """
     write_errors_split(
         args.input_csv, args.smiles_col, args.fragment_csv, args.fragment_col,
         args.train_csv, args.dev_csv, seed=args.seed, invalid_type=args.invalid_type,
@@ -42,6 +69,21 @@ def cmd_generate_errors(args: argparse.Namespace) -> None:
 
 
 def cmd_train(args: argparse.Namespace) -> None:
+    """Runs the ``train`` subcommand: trains a new corrector model, or
+    resumes training from an existing checkpoint.
+
+    :param args: Parsed ``train`` arguments; must provide ``train_csv``/
+        ``dev_csv`` (training/validation data), ``src_col``/``trg_col``
+        (columns holding the invalid/valid SMILES), ``checkpoint_out``
+        (where to write the best checkpoint), ``resume`` (path to an
+        existing checkpoint to continue from, or ``None`` to train from
+        scratch), model hyperparameters (``vocab_max_size``, ``max_length``,
+        ``hid_dim``, ``n_layers``, ``n_heads``, ``pf_dim``, ``dropout``),
+        and training settings (``device``, ``seed``, ``batch_size``,
+        ``epochs``, ``lr``, ``clip``, ``patience``, ``num_workers``,
+        ``shuffle_buffer``).
+    :return: None
+    """
     device = resolve_device(args.device)
     torch.manual_seed(args.seed)
 
@@ -84,10 +126,28 @@ def cmd_train(args: argparse.Namespace) -> None:
 
 
 def cmd_fetch_data(args: argparse.Namespace) -> None:
+    """Runs the ``fetch-data`` subcommand: downloads bundled example
+    datasets and/or the pretrained checkpoint.
+
+    :param args: Parsed ``fetch-data`` arguments; must provide ``dest``
+        (repo root to download into), ``only`` (restrict to these dest
+        paths, or ``None`` for everything) and ``force`` (redownload even
+        if a file already exists).
+    :return: None
+    """
     fetch_all(root=args.dest, only=args.only, force=args.force)
 
 
 def cmd_fix(args: argparse.Namespace) -> None:
+    """Runs the ``fix`` subcommand: corrects SMILES in a CSV using a trained
+    checkpoint.
+
+    :param args: Parsed ``fix`` arguments; must provide ``checkpoint``
+        (trained model to load), ``input_csv``/``smiles_col`` (SMILES to
+        correct), ``output_csv`` (destination for corrected SMILES),
+        ``batch_size`` and ``device``.
+    :return: None
+    """
     device = resolve_device(args.device)
     model = Seq2Seq.load_checkpoint(args.checkpoint, device)
     model.fix_smiles_csv(
@@ -97,6 +157,12 @@ def cmd_fix(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Builds the top-level argument parser and its subcommands.
+
+    :return: Parser with ``standardize``, ``generate-errors``, ``train``,
+        ``fetch-data``, and ``fix`` subcommands registered, each with
+        ``func`` set to its handler via :meth:`~argparse.ArgumentParser.set_defaults`.
+    """
     parser = argparse.ArgumentParser(prog="uncorrupt-smiles")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -167,6 +233,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """CLI entrypoint: parses arguments and dispatches to the selected
+    subcommand handler.
+
+    :param argv: Argument list to parse, excluding the program name; if
+        ``None``, parses :data:`sys.argv` as usual.
+    :return: None
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     args.func(args)

@@ -26,10 +26,20 @@ _GITHUB_RELEASE_URL = "https://github.com/{repo}/releases/download/{tag}/{filena
 
 
 def _zenodo_url(filename: str) -> str:
+    """Builds the download URL for a file hosted on the pinned Zenodo record.
+
+    :param filename: Name of the file within the Zenodo record.
+    :return: Fully qualified download URL.
+    """
     return _ZENODO_URL.format(record=ZENODO_RECORD, filename=filename)
 
 
 def _release_url(filename: str) -> str:
+    """Builds the download URL for an asset attached to the pinned GitHub release.
+
+    :param filename: Name of the release asset file.
+    :return: Fully qualified download URL.
+    """
     return _GITHUB_RELEASE_URL.format(repo=GITHUB_REPO, tag=GITHUB_RELEASE_TAG, filename=filename)
 
 
@@ -72,6 +82,12 @@ ASSETS: list[Asset] = [
 
 
 def _md5sum(path: Path, chunk_size: int = 1 << 20) -> str:
+    """Computes the MD5 checksum of a file, reading it in fixed-size chunks.
+
+    :param path: Path to the local file to hash.
+    :param chunk_size: Number of bytes read per chunk while hashing.
+    :return: Hex-encoded MD5 digest.
+    """
     digest = hashlib.md5()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
@@ -81,7 +97,19 @@ def _md5sum(path: Path, chunk_size: int = 1 << 20) -> str:
 
 def download_file(url: str, dest: Path, md5: str | None = None, chunk_size: int = 1 << 20) -> None:
     """Streams url to dest (via a .part temp file, moved into place only after a successful,
-    checksum-verified download), creating parent directories as needed."""
+    checksum-verified download), creating parent directories as needed.
+
+    :param url: Source URL to download the file from.
+    :param dest: Final destination path; only written to once the download
+        (and, if `md5` is given, checksum verification) succeeds.
+    :param md5: Expected MD5 checksum of the downloaded content. If given
+        and it does not match, the partial download is removed and an
+        error is raised.
+    :param chunk_size: Number of bytes read/written per chunk while
+        streaming the response body.
+    :raises ValueError: If `md5` is given and does not match the checksum
+        of the downloaded file.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = Path(str(dest) + ".part")
     with urllib.request.urlopen(url) as response, open(tmp_path, "wb") as f:
@@ -101,7 +129,17 @@ def download_file(url: str, dest: Path, md5: str | None = None, chunk_size: int 
 def fetch_all(root: str = ".", only: list[str] | None = None, force: bool = False) -> None:
     """Downloads every configured asset into `root` (matching this project's own directory
     layout - data/, generated/, rawdata/). Already-present files are skipped unless `force`.
-    `only` restricts to specific `dest` paths (e.g. ["rawdata/gbd_8.csv"])."""
+    `only` restricts to specific `dest` paths (e.g. ["rawdata/gbd_8.csv"]).
+
+    :param root: Root directory the assets' `dest` paths are resolved
+        against, e.g. the project checkout root.
+    :param only: If given, restricts downloading to assets whose `dest`
+        is in this list; all other configured assets are skipped.
+    :param force: If ``True``, re-download assets even if `dest` already
+        exists.
+    :raises ValueError: If a downloaded asset's checksum does not match its
+        configured `md5` (propagated from :func:`download_file`).
+    """
     root_path = Path(root)
     for asset in ASSETS:
         if only is not None and asset.dest not in only:

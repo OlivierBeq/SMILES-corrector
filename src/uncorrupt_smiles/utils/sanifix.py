@@ -1,9 +1,21 @@
 """Sanifix4 by James Davidson - fixes aromatic nitrogen perception RDKit sometimes gets wrong
 (e.g. O=c1ccncc1). Used by invalid_smiles.arom_error."""
+from __future__ import annotations
+
+from collections.abc import Iterable, Sequence
+
 from rdkit import Chem
 
 
-def _frag_indices_to_mol(o_mol, indices):
+def _frag_indices_to_mol(o_mol: Chem.Mol, indices: Sequence[int]) -> Chem.Mol:
+    """Builds a standalone molecule from a subset of another molecule's atoms.
+
+    :param o_mol: Source molecule to extract atoms from.
+    :param indices: Atom indices (into `o_mol`) to include in the fragment.
+    :return: A new molecule containing only the selected atoms and the bonds
+        between them, with a ``_idxMap`` attribute mapping original
+        `o_mol` atom indices to their index in the returned molecule.
+    """
     em = Chem.rdchem.EditableMol(Chem.rdchem.Mol())
 
     new_indices = {}
@@ -30,7 +42,22 @@ def _frag_indices_to_mol(o_mol, indices):
     return res
 
 
-def _recursively_modify_ns(mol, matches, indices=None):
+def _recursively_modify_ns(
+    mol: Chem.Mol, matches: Iterable[int], indices: list[int] | None = None
+) -> tuple[Chem.Mol | None, list[int]]:
+    """Tries marking candidate aromatic-nitrogen atoms as ``NoImplicit`` (with
+    zero explicit Hs) until the molecule sanitizes, backtracking through
+    `matches` depth-first.
+
+    :param mol: Molecule to modify. Not mutated in place - each attempt
+        works on an internal copy.
+    :param matches: Candidate atom indices to try adjusting, in order.
+    :param indices: Atom indices already committed to in the current
+        recursion branch; omit when starting a fresh top-level call.
+    :return: A tuple of the sanitized molecule (``None`` if no combination of
+        `matches` sanitizes) and the atom indices that were adjusted to reach
+        it.
+    """
     if indices is None:
         indices = []
     res = None
@@ -52,9 +79,16 @@ def _recursively_modify_ns(mol, matches, indices=None):
     return res, indices
 
 
-def AdjustAromaticNs(m, nitrogen_pattern="[n&D2&H1;r5,r6]"):
-    """Default nitrogen pattern matches Ns in 5- and 6-rings so molecules such as
-    O=c1ccncc1 can be sanitized/aromatized correctly."""
+def AdjustAromaticNs(m: Chem.Mol, nitrogen_pattern: str = "[n&D2&H1;r5,r6]") -> Chem.Mol:
+    """Fixes aromatic nitrogen perception so molecules such as ``O=c1ccncc1``
+    can be sanitized/aromatized correctly.
+
+    :param m: Molecule to fix, mutated and returned in place.
+    :param nitrogen_pattern: SMARTS pattern for candidate nitrogens; the
+        default matches Ns in 5- and 6-rings.
+    :return: The same molecule object as `m`, with nitrogen atoms adjusted
+        in place where a fix was found.
+    """
     Chem.rdmolops.GetSymmSSSR(m)
     m.UpdatePropertyCache(False)
 

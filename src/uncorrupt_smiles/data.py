@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import functools
 import random
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 
 import polars as pl
 import torch
@@ -25,7 +25,14 @@ def iter_csv_column(path: str, column: str, batch_size: int = 10_000, separator:
 
     The column is forced to Utf8: a SMILES column that happens to contain only
     digit-looking values (rare, but possible for a small fragment pool) would otherwise be
-    silently inferred as numeric, corrupting everything downstream."""
+    silently inferred as numeric, corrupting everything downstream.
+
+    :param path: Path to the CSV file to stream from.
+    :param column: Name of the column to read.
+    :param batch_size: Maximum number of rows materialized in memory at once.
+    :param separator: Field separator used by the CSV file.
+    :return: Iterator yielding the column's values as strings, row by row.
+    """
     lf = pl.scan_csv(path, separator=separator, schema_overrides={column: pl.Utf8}).select(column)
     for batch in lf.collect_batches(chunk_size=batch_size):
         yield from batch.get_column(column).to_list()
@@ -33,9 +40,17 @@ def iter_csv_column(path: str, column: str, batch_size: int = 10_000, separator:
 
 def iter_csv_columns(
     path: str, columns: Sequence[str], batch_size: int = 10_000, separator: str = ","
-) -> Iterator[tuple]:
+) -> Iterator[tuple[str, ...]]:
     """Yields one row tuple at a time across multiple CSV columns (forced to Utf8, see
-    iter_csv_column)."""
+    :func:`iter_csv_column`).
+
+    :param path: Path to the CSV file to stream from.
+    :param columns: Names of the columns to read, in the order they should
+        appear in each yielded tuple.
+    :param batch_size: Maximum number of rows materialized in memory at once.
+    :param separator: Field separator used by the CSV file.
+    :return: Iterator yielding one row tuple per row, values in `columns` order.
+    """
     lf = pl.scan_csv(
         path, separator=separator, schema_overrides={c: pl.Utf8 for c in columns}
     ).select(list(columns))
@@ -50,6 +65,18 @@ class SmilesPairIterableDataset(IterableDataset):
     standard bounded reservoir-window shuffle: fill a buffer of that size, then each new
     item swaps in for a random buffer slot while the evicted item is yielded. Set to 0 to
     disable and get file order.
+
+    :param csv_path: Path to the CSV file containing the source/target columns.
+    :param src_col: Name of the source-SMILES column.
+    :param trg_col: Name of the target-SMILES column.
+    :param src_vocab: Vocabulary used to encode source SMILES.
+    :param trg_vocab: Vocabulary used to encode target SMILES.
+    :param batch_read_size: Number of rows read from the CSV per streaming batch.
+    :param shuffle_buffer: Size of the reservoir-window shuffle buffer; 0 disables
+        shuffling and preserves file order.
+    :param seed: Base random seed; combined with the worker id so each
+        DataLoader worker shuffles independently.
+    :param separator: Field separator used by the CSV file.
     """
 
     def __init__(
@@ -63,7 +90,7 @@ class SmilesPairIterableDataset(IterableDataset):
         shuffle_buffer: int = 0,
         seed: int = 42,
         separator: str = ",",
-    ):
+    ) -> None:
         self.csv_path = csv_path
         self.src_col = src_col
         self.trg_col = trg_col
@@ -75,6 +102,13 @@ class SmilesPairIterableDataset(IterableDataset):
         self.separator = separator
 
     def _encode(self, src_text: str, trg_text: str) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tokenizes and encodes one (source, target) SMILES pair.
+
+        :param src_text: Raw source SMILES string to tokenize and encode.
+        :param trg_text: Raw target SMILES string to tokenize and encode.
+        :return: A pair of 1-D ``torch.long`` tensors: encoded source and
+            encoded (reverse-tokenized) target ids.
+        """
         src_ids = self.src_vocab.encode(smi_tokenizer(src_text))
         trg_ids = self.trg_vocab.encode(smi_tokenizer(trg_text, reverse=True))
         return (
@@ -82,7 +116,12 @@ class SmilesPairIterableDataset(IterableDataset):
             torch.tensor(trg_ids, dtype=torch.long),
         )
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        """Streams encoded (source, target) tensor pairs for this worker's shard.
+
+        :return: Iterator over encoded pairs, sharded across DataLoader
+            workers and optionally shuffled per :attr:`shuffle_buffer`.
+        """
         worker = get_worker_info()
         worker_id, num_workers = (worker.id, worker.num_workers) if worker else (0, 1)
         rng = random.Random(self.seed + worker_id)
@@ -114,6 +153,16 @@ class SmilesPairIterableDataset(IterableDataset):
 def collate_pairs(
     batch: list[tuple[torch.Tensor, torch.Tensor]], src_pad_idx: int, trg_pad_idx: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pads a batch of (source, target) tensor pairs into two rectangular batches.
+
+    :param batch: Per-example ``(src, trg)`` tensor pairs, as produced by
+        :meth:`SmilesPairIterableDataset._encode`.
+    :param src_pad_idx: Padding token id for the source vocabulary, used to
+        pad shorter source sequences.
+    :param trg_pad_idx: Padding token id for the target vocabulary, used to
+        pad shorter target sequences.
+    :return: Batch-first padded ``(src, trg)`` tensors.
+    """
     srcs, trgs = zip(*batch)
     src_padded = pad_sequence(list(srcs), batch_first=True, padding_value=src_pad_idx)
     trg_padded = pad_sequence(list(trgs), batch_first=True, padding_value=trg_pad_idx)
@@ -132,6 +181,23 @@ def make_loader(
     separator: str = ",",
     seed: int = 42,
 ) -> DataLoader:
+    """Builds a :class:`~torch.utils.data.DataLoader` over a streaming SMILES-pair CSV.
+
+    :param csv_path: Path to the CSV file containing the source/target columns.
+    :param src_col: Name of the source-SMILES column.
+    :param trg_col: Name of the target-SMILES column.
+    :param src_vocab: Vocabulary used to encode source SMILES; also supplies
+        the source padding index for collation.
+    :param trg_vocab: Vocabulary used to encode target SMILES; also supplies
+        the target padding index for collation.
+    :param batch_size: Number of examples per yielded batch.
+    :param shuffle_buffer: Size of the reservoir-window shuffle buffer; 0 disables
+        shuffling and preserves file order.
+    :param num_workers: Number of DataLoader worker processes.
+    :param separator: Field separator used by the CSV file.
+    :param seed: Base random seed for shuffling, combined with the worker id.
+    :return: A DataLoader yielding batch-first padded ``(src, trg)`` tensors.
+    """
     dataset = SmilesPairIterableDataset(
         csv_path, src_col, trg_col, src_vocab, trg_vocab,
         shuffle_buffer=shuffle_buffer, separator=separator, seed=seed,

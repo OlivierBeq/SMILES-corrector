@@ -8,7 +8,7 @@ original torchtext-Field-based version did.
 from __future__ import annotations
 
 import statistics
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import torch
 from rdkit import Chem, rdBase
@@ -21,9 +21,17 @@ rdBase.DisableLog("rdApp.error")
 
 
 def decode_batch(array: torch.Tensor, vocab: Vocab, reverse: bool) -> list[str]:
-    """Decodes a batch of token-id sequences ([batch, seq_len]) into SMILES strings,
-    truncating at <eos> and reversing back if the sequence was tokenized in reverse
-    (matches the reverse=True convention used for target sequences during training)."""
+    """Decodes a batch of token-id sequences into SMILES strings.
+
+    :param array: Batch-first token-id tensor, shape ``[batch, seq_len]``
+        (Seq2Seq's native layout).
+    :param vocab: Vocabulary used to decode ids back to tokens; decoding
+        truncates at ``<eos>``.
+    :param reverse: If ``True``, reverse each decoded token sequence before
+        joining (matches the ``reverse=True`` convention used for target
+        sequences during training).
+    :return: Decoded SMILES strings, one per row of `array`.
+    """
     smiles = []
     for row in array:
         tokens = vocab.decode(row.tolist(), stop_at_eos=True)
@@ -34,20 +42,41 @@ def decode_batch(array: torch.Tensor, vocab: Vocab, reverse: bool) -> list[str]:
 
 
 def validity(smiles_list: Iterable[str]) -> list[bool]:
-    """Whether each SMILES is RDKit-parseable (and non-empty)."""
+    """Checks each SMILES for RDKit-parseability.
+
+    :param smiles_list: SMILES strings to validate.
+    :return: ``True`` per input that is RDKit-parseable and non-empty, via
+        :func:`~uncorrupt_smiles.utils.chem.is_valid_smiles`.
+    """
     return [is_valid_smiles(s) for s in smiles_list]
 
 
 def count_unchanged(sources: list[str], outputs: list[str], valids: list[bool]) -> int:
-    """Count of invalid outputs that are identical to their source (model failed to change
-    an already-broken input at all)."""
+    """Counts invalid outputs identical to their source.
+
+    :param sources: Input SMILES fed to the model.
+    :param outputs: Model-produced SMILES, aligned index-wise with `sources`.
+    :param valids: Validity flags for `outputs`, aligned index-wise (e.g. from
+        :func:`validity`).
+    :return: Number of examples where the output is invalid and identical to
+        the source, i.e. the model failed to change an already-broken input
+        at all.
+    """
     return sum(1 for src, out, valid in zip(sources, outputs, valids) if not valid and out == src)
 
 
 def count_reconstructed(targets: list[str], outputs: list[str]) -> int:
-    """Count of outputs that are the same molecule as their target, compared via canonical
-    SMILES equality. Simpler and stricter than a bidirectional substructure match (which can
-    pass for non-identical molecules sharing a symmetric substructure)."""
+    """Counts outputs that are the same molecule as their target.
+
+    Compares via canonical SMILES equality - simpler and stricter than a
+    bidirectional substructure match, which can pass for non-identical
+    molecules sharing a symmetric substructure.
+
+    :param targets: Expected/ground-truth SMILES.
+    :param outputs: Model-produced SMILES, aligned index-wise with `targets`.
+    :return: Number of index-aligned pairs whose canonical SMILES match.
+        Pairs where either side fails to parse are skipped.
+    """
     matches = 0
     for target, output in zip(targets, outputs):
         m = Chem.MolFromSmiles(target)
@@ -59,10 +88,18 @@ def count_reconstructed(targets: list[str], outputs: list[str]) -> int:
     return matches
 
 
-def complexity_whitlock(mol: Chem.Mol, include_all_descs: bool = False):
-    """Complexity as defined in DOI:10.1021/jo9814546.
-    S: complexity = 4*#rings + 2*#unsat + #hetatm + 2*#chiral
-    Other descriptors: H: size = #bonds (incl. H), G: S + H, Ratio: S / H
+def complexity_whitlock(mol: Chem.Mol, include_all_descs: bool = False) -> int | dict[str, float]:
+    """Computes molecular complexity as defined in DOI:10.1021/jo9814546.
+
+    S: complexity = 4*#rings + 2*#unsat + #hetatm + 2*#chiral.
+    Other descriptors: H: size = #bonds (incl. H), G: S + H, Ratio: S / H.
+
+    :param mol: Molecule to score. Not mutated - an internal copy is used.
+    :param include_all_descs: If ``True``, also compute H, G and Ratio in
+        addition to S.
+    :return: The S-score alone if `include_all_descs` is ``False``, otherwise
+        a dict with keys ``"WhitlockS"``, ``"WhitlockH"``, ``"WhitlockG"``,
+        ``"WhitlockRatio"``.
     """
     mol_ = Chem.Mol(mol)
     nrings = Lipinski.RingCount(mol_) - Lipinski.NumAromaticRings(mol_)
@@ -87,7 +124,11 @@ def complexity_whitlock(mol: Chem.Mol, include_all_descs: bool = False):
 
 
 def complexity_baronechanon(mol: Chem.Mol) -> float:
-    """Complexity as defined in DOI:10.1021/ci000145p."""
+    """Computes molecular complexity as defined in DOI:10.1021/ci000145p.
+
+    :param mol: Molecule to score. Not mutated - an internal copy is used.
+    :return: Complexity score.
+    """
     mol_ = Chem.Mol(mol)
     Chem.Kekulize(mol_)
     Chem.RemoveStereochemistry(mol_)
@@ -101,10 +142,23 @@ def complexity_baronechanon(mol: Chem.Mol) -> float:
 
 
 def calc_complexity(
-    targets: list[str], valids: list[bool], complexity_function=GraphDescriptors.BertzCT
+    targets: list[str],
+    valids: list[bool],
+    complexity_function: Callable[[Chem.Mol], float] = GraphDescriptors.BertzCT,
 ) -> float:
-    """Mean complexity of target molecules whose corresponding prediction was invalid -
-    measures whether the model struggles more on inherently harder molecules."""
+    """Computes mean complexity of target molecules whose corresponding
+    prediction was invalid - measures whether the model struggles more on
+    inherently harder molecules.
+
+    :param targets: Expected/ground-truth SMILES.
+    :param valids: Validity flags for the corresponding predictions, aligned
+        index-wise with `targets` (e.g. from :func:`validity`).
+    :param complexity_function: Callable computing a complexity score for an
+        RDKit molecule; defaults to RDKit's Bertz complexity index
+        (``GraphDescriptors.BertzCT``).
+    :return: Mean complexity over targets whose prediction was invalid and
+        which parse successfully, or ``0.0`` if there are none.
+    """
     complexities = []
     for target, valid in zip(targets, valids):
         if valid:
@@ -116,6 +170,12 @@ def calc_complexity(
 
 
 def epoch_time(start_time: float, end_time: float) -> tuple[int, int]:
+    """Converts an elapsed duration into whole minutes and seconds.
+
+    :param start_time: Start timestamp (e.g. from :func:`time.time`).
+    :param end_time: End timestamp, same clock as `start_time`.
+    :return: ``(minutes, seconds)``, both truncated to whole numbers.
+    """
     elapsed = end_time - start_time
     mins = int(elapsed / 60)
     secs = int(elapsed - mins * 60)

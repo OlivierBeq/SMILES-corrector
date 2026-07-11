@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader
 
 from uncorrupt_smiles.data import iter_csv_column
 from uncorrupt_smiles.utils.metric import (
@@ -31,17 +32,58 @@ from uncorrupt_smiles.vocab import Vocab
 
 
 def init_weights(m: nn.Module) -> None:
+    """Applies Xavier-uniform init to any weighted submodule, in place.
+
+    Intended for use with :meth:`nn.Module.apply`, e.g. ``model.apply(init_weights)``.
+
+    :param m: Submodule being visited by :meth:`nn.Module.apply`; only
+        touched if it has a multi-dimensional `weight` attribute.
+    :return: None
+    """
     if hasattr(m, "weight") and m.weight.dim() > 1:
         nn.init.xavier_uniform_(m.weight.data)
 
 
 def count_parameters(model: nn.Module) -> int:
+    """Counts trainable parameters in a model.
+
+    :param model: Model whose parameters are summed.
+    :return: Total number of elements across all parameters with
+        ``requires_grad=True``.
+    """
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 class Encoder(nn.Module):
+    """Transformer encoder stack: token + positional embeddings followed by
+    ``n_layers`` stacked :class:`EncoderLayer` blocks.
+    """
 
-    def __init__(self, input_dim, hid_dim, n_layers, n_heads, pf_dim, dropout, max_length, device):
+    def __init__(
+        self,
+        input_dim: int,
+        hid_dim: int,
+        n_layers: int,
+        n_heads: int,
+        pf_dim: int,
+        dropout: float,
+        max_length: int,
+        device: str,
+    ) -> None:
+        """
+        :param input_dim: Source vocabulary size, i.e. the number of rows in
+            the token embedding table.
+        :param hid_dim: Model/hidden dimension carried through every sublayer.
+        :param n_layers: Number of stacked :class:`EncoderLayer` blocks.
+        :param n_heads: Number of attention heads per layer.
+        :param pf_dim: Hidden dimension of each layer's position-wise
+            feedforward sublayer.
+        :param dropout: Dropout probability applied throughout the stack.
+        :param max_length: Maximum sequence length supported by the
+            positional embedding table.
+        :param device: Device the module's embeddings and buffers are
+            allocated on.
+        """
         super().__init__()
         self.device = device
         self.tok_embedding = nn.Embedding(input_dim, hid_dim)
@@ -52,8 +94,14 @@ class Encoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = torch.sqrt(torch.FloatTensor([hid_dim])).to(device)
 
-    def forward(self, src, src_mask):
-        # src = [batch size, src len]
+    def forward(self, src: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
+        """
+        :param src: Source token ids, shape ``[batch size, src len]``.
+        :param src_mask: Padding mask excluding ``<pad>`` positions from
+            attention, shape ``[batch size, 1, 1, src len]``.
+        :return: Encoded source representations, shape
+            ``[batch size, src len, hid dim]``.
+        """
         batch_size, src_len = src.shape[0], src.shape[1]
         pos = torch.arange(0, src_len).unsqueeze(0).repeat(batch_size, 1).to(self.device)
         src = self.dropout((self.tok_embedding(src) * self.scale) + self.pos_embedding(pos))
@@ -63,8 +111,20 @@ class Encoder(nn.Module):
 
 
 class EncoderLayer(nn.Module):
+    """One encoder block: self-attention followed by a position-wise
+    feedforward sublayer, each with a residual connection and layer norm.
+    """
 
-    def __init__(self, hid_dim, n_heads, pf_dim, dropout, device):
+    def __init__(self, hid_dim: int, n_heads: int, pf_dim: int, dropout: float, device: str) -> None:
+        """
+        :param hid_dim: Model/hidden dimension carried through the block.
+        :param n_heads: Number of attention heads used by the self-attention
+            sublayer.
+        :param pf_dim: Hidden dimension of the position-wise feedforward
+            sublayer.
+        :param dropout: Dropout probability applied after each sublayer.
+        :param device: Device the block's buffers are allocated on.
+        """
         super().__init__()
         self.self_attn_layer_norm = nn.LayerNorm(hid_dim)
         self.ff_layer_norm = nn.LayerNorm(hid_dim)
@@ -72,7 +132,13 @@ class EncoderLayer(nn.Module):
         self.positionwise_feedforward = PositionwiseFeedforwardLayer(hid_dim, pf_dim, dropout)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, src, src_mask):
+    def forward(self, src: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
+        """
+        :param src: Input representations, shape ``[batch size, src len, hid dim]``.
+        :param src_mask: Padding mask excluding ``<pad>`` positions from
+            attention, shape ``[batch size, 1, 1, src len]``.
+        :return: Updated representations, same shape as `src`.
+        """
         _src, _ = self.self_attention(src, src, src, src_mask)
         src = self.self_attn_layer_norm(src + self.dropout(_src))
         _src = self.positionwise_feedforward(src)
@@ -81,8 +147,17 @@ class EncoderLayer(nn.Module):
 
 
 class MultiHeadAttentionLayer(nn.Module):
+    """Scaled dot-product multi-head attention."""
 
-    def __init__(self, hid_dim, n_heads, dropout, device):
+    def __init__(self, hid_dim: int, n_heads: int, dropout: float, device: str) -> None:
+        """
+        :param hid_dim: Model/hidden dimension of the query/key/value
+            projections; must be divisible by `n_heads`.
+        :param n_heads: Number of attention heads to split `hid_dim` into.
+        :param dropout: Dropout probability applied to attention weights.
+        :param device: Device the module's buffers are allocated on.
+        :raises AssertionError: If `hid_dim` is not divisible by `n_heads`.
+        """
         super().__init__()
         assert hid_dim % n_heads == 0
         self.hid_dim = hid_dim
@@ -95,7 +170,24 @@ class MultiHeadAttentionLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = torch.sqrt(torch.FloatTensor([self.head_dim])).to(device)
 
-    def forward(self, query, key, value, mask=None):
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        :param query: Query vectors, shape ``[batch size, query len, hid dim]``.
+        :param key: Key vectors, shape ``[batch size, key len, hid dim]``.
+        :param value: Value vectors, shape ``[batch size, key len, hid dim]``.
+        :param mask: Optional attention mask broadcastable to
+            ``[batch size, n heads, query len, key len]``; masked positions
+            (where the mask is 0) are excluded from attention.
+        :return: Tuple of (attended output, shape
+            ``[batch size, query len, hid dim]``; attention weights, shape
+            ``[batch size, n heads, query len, key len]``).
+        """
         batch_size = query.shape[0]
         q = self.fc_q(query)
         k = self.fc_k(key)
@@ -115,22 +207,60 @@ class MultiHeadAttentionLayer(nn.Module):
 
 
 class PositionwiseFeedforwardLayer(nn.Module):
+    """Two-layer feedforward sublayer applied independently at each position."""
 
-    def __init__(self, hid_dim, pf_dim, dropout):
+    def __init__(self, hid_dim: int, pf_dim: int, dropout: float) -> None:
+        """
+        :param hid_dim: Input/output dimension of the sublayer.
+        :param pf_dim: Hidden dimension of the intermediate linear layer.
+        :param dropout: Dropout probability applied after the ReLU.
+        """
         super().__init__()
         self.fc_1 = nn.Linear(hid_dim, pf_dim)
         self.fc_2 = nn.Linear(pf_dim, hid_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: Input, shape ``[batch size, seq len, hid dim]``.
+        :return: Output, same shape as `x`.
+        """
         x = self.dropout(torch.relu(self.fc_1(x)))
         x = self.fc_2(x)
         return x
 
 
 class Decoder(nn.Module):
+    """Transformer decoder stack: token + positional embeddings, ``n_layers``
+    stacked :class:`DecoderLayer` blocks, and an output projection to vocabulary
+    logits.
+    """
 
-    def __init__(self, output_dim, hid_dim, n_layers, n_heads, pf_dim, dropout, max_length, device):
+    def __init__(
+        self,
+        output_dim: int,
+        hid_dim: int,
+        n_layers: int,
+        n_heads: int,
+        pf_dim: int,
+        dropout: float,
+        max_length: int,
+        device: str,
+    ) -> None:
+        """
+        :param output_dim: Target vocabulary size, i.e. the number of logits
+            produced per position.
+        :param hid_dim: Model/hidden dimension carried through every sublayer.
+        :param n_layers: Number of stacked :class:`DecoderLayer` blocks.
+        :param n_heads: Number of attention heads per layer.
+        :param pf_dim: Hidden dimension of each layer's position-wise
+            feedforward sublayer.
+        :param dropout: Dropout probability applied throughout the stack.
+        :param max_length: Maximum sequence length supported by the
+            positional embedding table.
+        :param device: Device the module's embeddings and buffers are
+            allocated on.
+        """
         super().__init__()
         self.device = device
         self.tok_embedding = nn.Embedding(output_dim, hid_dim)
@@ -142,7 +272,25 @@ class Decoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = torch.sqrt(torch.FloatTensor([hid_dim])).to(device)
 
-    def forward(self, trg, enc_src, trg_mask, src_mask):
+    def forward(
+        self,
+        trg: torch.Tensor,
+        enc_src: torch.Tensor,
+        trg_mask: torch.Tensor,
+        src_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        :param trg: Target token ids, shape ``[batch size, trg len]``.
+        :param enc_src: Encoder output to attend over, shape
+            ``[batch size, src len, hid dim]``.
+        :param trg_mask: Combined padding + causal mask for `trg`, shape
+            ``[batch size, 1, trg len, trg len]``.
+        :param src_mask: Padding mask for `enc_src`, shape
+            ``[batch size, 1, 1, src len]``.
+        :return: Tuple of (vocabulary logits, shape
+            ``[batch size, trg len, output dim]``; last layer's
+            encoder-decoder attention weights).
+        """
         batch_size, trg_len = trg.shape[0], trg.shape[1]
         pos = torch.arange(0, trg_len).unsqueeze(0).repeat(batch_size, 1).to(self.device)
         trg = self.dropout((self.tok_embedding(trg) * self.scale) + self.pos_embedding(pos))
@@ -154,8 +302,21 @@ class Decoder(nn.Module):
 
 
 class DecoderLayer(nn.Module):
+    """One decoder block: masked self-attention, encoder-decoder attention, then
+    a position-wise feedforward sublayer, each with a residual connection and
+    layer norm.
+    """
 
-    def __init__(self, hid_dim, n_heads, pf_dim, dropout, device):
+    def __init__(self, hid_dim: int, n_heads: int, pf_dim: int, dropout: float, device: str) -> None:
+        """
+        :param hid_dim: Model/hidden dimension carried through the block.
+        :param n_heads: Number of attention heads used by each attention
+            sublayer.
+        :param pf_dim: Hidden dimension of the position-wise feedforward
+            sublayer.
+        :param dropout: Dropout probability applied after each sublayer.
+        :param device: Device the block's buffers are allocated on.
+        """
         super().__init__()
         self.self_attn_layer_norm = nn.LayerNorm(hid_dim)
         self.enc_attn_layer_norm = nn.LayerNorm(hid_dim)
@@ -165,7 +326,25 @@ class DecoderLayer(nn.Module):
         self.positionwise_feedforward = PositionwiseFeedforwardLayer(hid_dim, pf_dim, dropout)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, trg, enc_src, trg_mask, src_mask):
+    def forward(
+        self,
+        trg: torch.Tensor,
+        enc_src: torch.Tensor,
+        trg_mask: torch.Tensor,
+        src_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        :param trg: Target representations, shape ``[batch size, trg len, hid dim]``.
+        :param enc_src: Encoder output to attend over, shape
+            ``[batch size, src len, hid dim]``.
+        :param trg_mask: Combined padding + causal mask for `trg`, shape
+            ``[batch size, 1, trg len, trg len]``.
+        :param src_mask: Padding mask for `enc_src`, shape
+            ``[batch size, 1, 1, src len]``.
+        :return: Tuple of (updated target representations, same shape as
+            `trg`; encoder-decoder attention weights, shape
+            ``[batch size, n heads, trg len, src len]``).
+        """
         _trg, _ = self.self_attention(trg, trg, trg, trg_mask)
         trg = self.self_attn_layer_norm(trg + self.dropout(_trg))
         _trg, attention = self.encoder_attention(trg, enc_src, enc_src, src_mask)
@@ -176,18 +355,46 @@ class DecoderLayer(nn.Module):
 
 
 class Seq2Seq(nn.Module):
+    """Encoder-decoder transformer that translates invalid SMILES into valid ones.
+
+    Owns its whole lifecycle as methods: :meth:`forward` (teacher-forced
+    training step), :meth:`generate` (autoregressive inference),
+    :meth:`fit`/:meth:`evaluate` (training loop), :meth:`fix_smiles`/
+    :meth:`fix_smiles_csv` (the "anyone can fix a SMILES" API), and
+    :meth:`save_checkpoint`/:meth:`load_checkpoint` (one bundled artifact -
+    state_dict + hyperparams + vocab, no separate config file needed).
+    """
 
     def __init__(
         self,
-        encoder,
-        decoder,
-        src_pad_idx,
-        trg_pad_idx,
-        device,
+        encoder: Encoder,
+        decoder: Decoder,
+        src_pad_idx: int,
+        trg_pad_idx: int,
+        device: str,
         hyperparams: dict,
         src_vocab: Vocab | None = None,
         trg_vocab: Vocab | None = None,
-    ):
+    ) -> None:
+        """
+        :param encoder: Encoder submodule that turns source ids into
+            contextual representations.
+        :param decoder: Decoder submodule that turns those representations
+            into target vocabulary logits.
+        :param src_pad_idx: Padding token id in the source vocabulary, used
+            to build the source attention mask.
+        :param trg_pad_idx: Padding token id in the target vocabulary, used
+            to build the target attention mask.
+        :param device: Device the model runs on.
+        :param hyperparams: Architecture hyperparameters, as produced by
+            :meth:`build`; persisted verbatim by :meth:`save_checkpoint` so
+            :meth:`load_checkpoint` can reconstruct an identical architecture.
+        :param src_vocab: Vocabulary token ids are encoded against on the
+            source (input) side. Prefer setting this via :meth:`build`,
+            :meth:`fit`, or :meth:`load_checkpoint` rather than directly.
+        :param trg_vocab: Vocabulary token ids are decoded against on the
+            target (output) side.
+        """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -208,7 +415,7 @@ class Seq2Seq(nn.Module):
         input_dim: int,
         output_dim: int,
         max_length: int,
-        device,
+        device: str,
         src_pad_idx: int,
         trg_pad_idx: int,
         hid_dim: int = 128,
@@ -219,8 +426,31 @@ class Seq2Seq(nn.Module):
         src_vocab: Vocab | None = None,
         trg_vocab: Vocab | None = None,
     ) -> "Seq2Seq":
-        """Small-but-functional defaults sized for an 8GB GPU; a full-scale run just passes
-        larger hid_dim/n_layers/n_heads/pf_dim."""
+        """Constructs an encoder, decoder, and wrapping :class:`Seq2Seq`, then
+        applies :func:`init_weights` and moves the result to `device`.
+
+        Small-but-functional defaults sized for an 8GB GPU; a full-scale run
+        just passes larger `hid_dim`/`n_layers`/`n_heads`/`pf_dim`.
+
+        :param input_dim: Source vocabulary size.
+        :param output_dim: Target vocabulary size.
+        :param max_length: Maximum sequence length supported by the
+            positional embeddings.
+        :param device: Device to build the model on.
+        :param src_pad_idx: Padding token id in the source vocabulary.
+        :param trg_pad_idx: Padding token id in the target vocabulary.
+        :param hid_dim: Model/hidden dimension.
+        :param n_layers: Number of encoder/decoder layers.
+        :param n_heads: Number of attention heads per layer.
+        :param pf_dim: Hidden dimension of each position-wise feedforward
+            sublayer.
+        :param dropout: Dropout probability.
+        :param src_vocab: Source vocabulary to attach to the model, if
+            available.
+        :param trg_vocab: Target vocabulary to attach to the model, if
+            available.
+        :return: A newly initialized model on `device`.
+        """
         encoder = Encoder(input_dim, hid_dim, n_layers, n_heads, pf_dim, dropout, max_length, device)
         decoder = Decoder(output_dim, hid_dim, n_layers, n_heads, pf_dim, dropout, max_length, device)
         hyperparams = dict(
@@ -233,6 +463,11 @@ class Seq2Seq(nn.Module):
         return model.to(device)
 
     def _require_vocab(self) -> tuple[Vocab, Vocab]:
+        """Guard used by methods that need `src_vocab`/`trg_vocab` to already be set.
+
+        :return: The model's source and target vocabularies.
+        :raises ValueError: If either `src_vocab` or `trg_vocab` is unset.
+        """
         if self.src_vocab is None or self.trg_vocab is None:
             raise ValueError(
                 "this model has no src_vocab/trg_vocab attached - set them via fit(...), "
@@ -240,20 +475,41 @@ class Seq2Seq(nn.Module):
             )
         return self.src_vocab, self.trg_vocab
 
-    def make_src_mask(self, src):
-        # src_mask = [batch size, 1, 1, src len]
+    def make_src_mask(self, src: torch.Tensor) -> torch.Tensor:
+        """Builds the source padding mask used to exclude pad tokens from attention.
+
+        :param src: Source token ids, shape ``[batch size, src len]``.
+        :return: Boolean mask, shape ``[batch size, 1, 1, src len]``, ``True``
+            at non-pad positions.
+        """
         return (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
 
-    def make_trg_mask(self, trg):
+    def make_trg_mask(self, trg: torch.Tensor) -> torch.Tensor:
+        """Builds the target mask combining padding exclusion with causal
+        (no-peek-ahead) masking.
+
+        :param trg: Target token ids, shape ``[batch size, trg len]``.
+        :return: Boolean mask, shape ``[batch size, 1, trg len, trg len]``,
+            ``True`` where a position may attend to another.
+        """
         trg_pad_mask = (trg != self.trg_pad_idx).unsqueeze(1).unsqueeze(2)
         trg_len = trg.shape[1]
         trg_sub_mask = torch.tril(torch.ones((trg_len, trg_len), device=self.device)).bool()
         return trg_pad_mask & trg_sub_mask
 
-    def forward(self, src, trg):
-        """Teacher-forced training step. src = [batch, src_len], trg = [batch, trg_len]
-        (already the decoder-input slice, i.e. caller passes trg[:, :-1]).
-        Returns (logits [batch, trg_len, output_dim], attention)."""
+    def forward(
+        self, src: torch.Tensor, trg: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Teacher-forced training step.
+
+        :param src: Source token ids, shape ``[batch size, src len]``.
+        :param trg: Decoder-input target token ids, shape
+            ``[batch size, trg len]`` (i.e. the caller passes ``trg[:, :-1]``,
+            not the full target sequence).
+        :return: Tuple of (vocabulary logits, shape
+            ``[batch size, trg len, output dim]``; last decoder layer's
+            encoder-decoder attention weights).
+        """
         src_mask = self.make_src_mask(src)
         trg_mask = self.make_trg_mask(trg)
         enc_src = self.encoder(src, src_mask)
@@ -262,8 +518,19 @@ class Seq2Seq(nn.Module):
 
     @torch.no_grad()
     def generate(self, src: torch.Tensor, max_len: int, sos_idx: int, eos_idx: int) -> torch.Tensor:
-        """Greedy autoregressive decode. Returns token ids [batch, out_len] (including the
-        leading sos_idx), stopping early once every sequence in the batch has emitted eos_idx."""
+        """Greedy autoregressive decode.
+
+        :param src: Source token ids to condition generation on, shape
+            ``[batch size, src len]``.
+        :param max_len: Maximum number of tokens to generate beyond the
+            leading ``<sos>``.
+        :param sos_idx: Id of the start-of-sequence token to seed decoding with.
+        :param eos_idx: Id of the end-of-sequence token; generation for a
+            given sequence stops once this token is emitted.
+        :return: Generated token ids, shape ``[batch size, out len]``,
+            including the leading `sos_idx`. Decoding stops early once every
+            sequence in the batch has emitted `eos_idx`.
+        """
         self.eval()
         batch_size = src.shape[0]
         src_mask = self.make_src_mask(src)
@@ -282,8 +549,8 @@ class Seq2Seq(nn.Module):
 
     def fit(
         self,
-        train_loader,
-        valid_loader,
+        train_loader: DataLoader,
+        valid_loader: DataLoader | None,
         src_vocab: Vocab,
         trg_vocab: Vocab,
         epochs: int,
@@ -293,11 +560,33 @@ class Seq2Seq(nn.Module):
         patience: int = 10,
         max_len: int | None = None,
     ) -> None:
-        """Owns the whole training loop: optimizer, loss, gradient clipping, per-epoch
-        validation metrics, and best-checkpoint tracking (checkpoints whenever the
-        reconstruction error improves; early-stops after `patience` epochs without
-        improvement if valid_loader is given). Attaches src_vocab/trg_vocab to the model
-        itself, since a checkpoint and the vocab it was trained with cannot be separated."""
+        """Owns the whole training loop: optimizer, loss, gradient clipping,
+        per-epoch validation metrics, and best-checkpoint tracking.
+
+        Checkpoints whenever the reconstruction error improves; early-stops
+        after `patience` epochs without improvement if `valid_loader` is
+        given. Attaches `src_vocab`/`trg_vocab` to the model itself, since a
+        checkpoint and the vocab it was trained with cannot be separated.
+
+        :param train_loader: Batches of ``(src, trg)`` tensors to train on.
+        :param valid_loader: Batches of ``(src, trg)`` tensors to validate
+            on after each epoch. If ``None``, training loss is used for
+            best-checkpoint tracking instead and early stopping is disabled.
+        :param src_vocab: Source vocabulary, attached to the model for the
+            duration of training and beyond.
+        :param trg_vocab: Target vocabulary, attached to the model for the
+            duration of training and beyond.
+        :param epochs: Maximum number of epochs to train for.
+        :param lr: Adam learning rate.
+        :param clip: Max gradient norm for gradient clipping.
+        :param checkpoint_path: If given, path to write the best checkpoint
+            to via :meth:`save_checkpoint`.
+        :param patience: Number of epochs without improvement (only
+            evaluated when `valid_loader` is given) before stopping early.
+        :param max_len: Maximum generation length used during validation;
+            defaults to ``hyperparams["max_length"]`` if ``None``.
+        :return: None
+        """
         self.src_vocab = src_vocab
         self.trg_vocab = trg_vocab
         optimizer = optim.Adam(self.parameters(), lr=lr)
@@ -360,13 +649,24 @@ class Seq2Seq(nn.Module):
 
     def evaluate(
         self,
-        loader,
+        loader: DataLoader,
         criterion: nn.Module | None = None,
         max_len: int | None = None,
-    ) -> dict:
-        """Runs teacher-forced loss plus free-running generate() over `loader`, returning
-        validity/reconstruction/unchanged rates and target-complexity-of-failures. Uses the
-        model's own src_vocab/trg_vocab (set by fit() or load_checkpoint())."""
+    ) -> dict[str, float]:
+        """Runs teacher-forced loss plus free-running :meth:`generate` over
+        `loader`, returning validity/reconstruction/unchanged rates and
+        target-complexity-of-failures. Uses the model's own
+        `src_vocab`/`trg_vocab` (set by :meth:`fit` or :meth:`load_checkpoint`).
+
+        :param loader: Batches of ``(src, trg)`` tensors to evaluate on.
+        :param criterion: Loss function; defaults to
+            ``nn.CrossEntropyLoss(ignore_index=self.trg_pad_idx)`` if ``None``.
+        :param max_len: Maximum generation length; defaults to
+            ``hyperparams["max_length"]`` if ``None``.
+        :return: Dict with keys ``loss``, ``validity_rate``,
+            ``reconstruction_rate``, ``unchanged_rate``, and ``complexity``.
+        :raises ValueError: If the model has no `src_vocab`/`trg_vocab` attached.
+        """
         src_vocab, trg_vocab = self._require_vocab()
         self.eval()
         if criterion is None:
@@ -421,9 +721,17 @@ class Seq2Seq(nn.Module):
         max_len: int | None = None,
         batch_size: int = 64,
     ) -> list[str]:
-        """The 'anyone can fix a SMILES' entrypoint. Accepts a single string or any
-        iterable (list, generator). Returns corrected SMILES in input order. Uses the
-        model's own src_vocab/trg_vocab (set by fit() or load_checkpoint())."""
+        """The "anyone can fix a SMILES" entrypoint. Uses the model's own
+        `src_vocab`/`trg_vocab` (set by :meth:`fit` or :meth:`load_checkpoint`).
+
+        :param smiles: A single (possibly invalid) SMILES string, or any
+            iterable of them (list, generator), to correct.
+        :param max_len: Maximum generation length per SMILES; defaults to
+            ``hyperparams["max_length"]`` if ``None``.
+        :param batch_size: Number of SMILES encoded/generated per batch.
+        :return: Corrected SMILES, in the same order as the input.
+        :raises ValueError: If the model has no `src_vocab`/`trg_vocab` attached.
+        """
         src_vocab, trg_vocab = self._require_vocab()
         smiles_list = [smiles] if isinstance(smiles, str) else list(smiles)
         if max_len is None:
@@ -446,9 +754,21 @@ class Seq2Seq(nn.Module):
         batch_size: int = 64,
         separator: str = ",",
     ) -> None:
-        """Streams input_csv in batches, calls fix_smiles() per batch, writes incrementally.
-        Works on any single-column SMILES file (e.g. output from an external generative
-        model) with zero full-file read."""
+        """Streams `input_csv` in batches, calls :meth:`fix_smiles` per batch,
+        and writes results incrementally. Works on any single-column SMILES
+        file (e.g. output from an external generative model) with zero
+        full-file read.
+
+        :param input_csv: Path to the CSV file containing the (possibly
+            invalid) SMILES to correct.
+        :param smiles_col: Name of the column in `input_csv` to read SMILES from.
+        :param output_csv: Destination CSV path to write results to; written
+            with columns `smiles_col` (original SMILES) and ``"FIXED"``
+            (corrected SMILES).
+        :param batch_size: Number of SMILES fixed per batch.
+        :param separator: Field separator used by `input_csv`.
+        :return: None
+        """
         with open(output_csv, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([smiles_col, "FIXED"])
@@ -464,9 +784,16 @@ class Seq2Seq(nn.Module):
                     writer.writerow([orig, fixed])
 
     def save_checkpoint(self, path: str) -> None:
-        """Bundles state_dict + architecture hyperparams + vocab into one artifact - a
-        learned/data artifact (like any PyTorch checkpoint), not a hand-authored config file.
-        Uses the model's own src_vocab/trg_vocab (set by fit() or load_checkpoint())."""
+        """Bundles state_dict + architecture hyperparams + vocab into one
+        artifact - a learned/data artifact (like any PyTorch checkpoint), not
+        a hand-authored config file. Uses the model's own
+        `src_vocab`/`trg_vocab` (set by :meth:`fit` or :meth:`load_checkpoint`).
+
+        :param path: Destination file path to write the checkpoint to,
+            readable back via :meth:`load_checkpoint`.
+        :return: None
+        :raises ValueError: If the model has no `src_vocab`/`trg_vocab` attached.
+        """
         src_vocab, trg_vocab = self._require_vocab()
         torch.save({
             "hyperparams": self.hyperparams,
@@ -476,10 +803,17 @@ class Seq2Seq(nn.Module):
         }, path)
 
     @classmethod
-    def load_checkpoint(cls, path: str, device) -> "Seq2Seq":
-        """Reconstructs the model together with the src_vocab/trg_vocab it was trained with -
-        the two cannot be used correctly apart from one another, so they are attached to the
-        returned model rather than handed back separately."""
+    def load_checkpoint(cls, path: str, device: str) -> "Seq2Seq":
+        """Reconstructs a model together with the `src_vocab`/`trg_vocab` it
+        was trained with - the two cannot be used correctly apart from one
+        another, so they are attached to the returned model rather than
+        handed back separately.
+
+        :param path: Path to a checkpoint file previously written by
+            :meth:`save_checkpoint`.
+        :param device: Device to load the reconstructed model onto.
+        :return: The reconstructed model, in evaluation-ready state.
+        """
         checkpoint = torch.load(path, map_location=device, weights_only=True)
         src_vocab = Vocab(checkpoint["src_itos"])
         trg_vocab = Vocab(checkpoint["trg_itos"])

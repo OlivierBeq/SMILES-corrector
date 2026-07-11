@@ -30,6 +30,14 @@ class Uncorrupt:
     """
 
     def __init__(self, checkpoint: str | None = None, device: str | None = None):
+        """
+        :param checkpoint: Path to a checkpoint written by
+            :meth:`~uncorrupt_smiles.transformer.Seq2Seq.save_checkpoint`. If
+            ``None``, uses the pretrained checkpoint bundled with this
+            project, downloading it first if not already present.
+        :param device: Torch device string to load the model onto. If
+            ``None``, uses ``"cuda"`` when available, otherwise ``"cpu"``.
+        """
         if checkpoint is None:
             checkpoint = DEFAULT_CHECKPOINT
             if not Path(checkpoint).exists():
@@ -47,8 +55,16 @@ class Uncorrupt:
         max_len: int | None = None,
         batch_size: int = 64,
     ) -> list[str]:
-        """Fixes a single SMILES string or an iterable of them. Returns corrected SMILES in
-        input order."""
+        """Fixes a single SMILES string or an iterable of them.
+
+        :param smiles: A single (possibly invalid) SMILES string, or an
+            iterable of them, to correct.
+        :param max_len: Maximum number of tokens to generate per corrected
+            SMILES. If ``None``, uses the model's default.
+        :param batch_size: Number of SMILES translated per forward pass
+            through the model.
+        :return: Corrected SMILES, in the same order as `smiles`.
+        """
         return self.model.fix_smiles(smiles, max_len=max_len, batch_size=batch_size)
 
     def fix_smiles_csv(
@@ -59,7 +75,20 @@ class Uncorrupt:
         batch_size: int = 64,
         separator: str = ",",
     ) -> None:
-        """Streams an entire CSV of SMILES through fix_smiles(), writing results incrementally."""
+        """Streams an entire CSV of SMILES through :meth:`fix_smiles`, writing
+        results incrementally.
+
+        :param input_csv: Path to the CSV file containing the SMILES to
+            correct.
+        :param smiles_col: Name of the column in `input_csv` holding the
+            SMILES to correct.
+        :param output_csv: Path to write the corrected SMILES to, as a new
+            CSV file.
+        :param batch_size: Number of SMILES translated per forward pass
+            through the model.
+        :param separator: Field separator used by both `input_csv` and
+            `output_csv`.
+        """
         self.model.fix_smiles_csv(
             input_csv, smiles_col, output_csv, batch_size=batch_size, separator=separator,
         )
