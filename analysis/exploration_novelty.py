@@ -2,7 +2,7 @@ import pandas as pd
 import random
 import pickle
 
-from src.preprocess import standardization_pipeline, remove_smiles_duplicates
+from uncorrupt_smiles.preprocess import standardize_smiles
 
 
 if __name__ == "__main__":    
@@ -12,17 +12,17 @@ if __name__ == "__main__":
 
     name = 'selective_ki'
     errors_per_molecule = 1000
-    error_source = "Data/explore/%s_with_%s_errors_index.csv" % (name, errors_per_molecule)
+    error_source = "data/explore/%s_with_%s_errors_index.csv" % (name, errors_per_molecule)
 
-    folder_raw = "RawData/"
-    folder_out = "Data/"
+    folder_raw = "rawdata/"
+    folder_out = "data/"
     invalid_type = 'multiple'
     num_errors = 12
     threshold = 200
     data_source = f"PAPYRUS_{threshold}"
 
-    df = pd.read_csv('Data/explore/selective_ki_with_1000_errors_index.csv')
-    df_o = pd.read_csv('Data/explore/selective_ki_with_1000_errors_index_fixed.csv')
+    df = pd.read_csv('data/explore/selective_ki_with_1000_errors_index.csv')
+    df_o = pd.read_csv('data/explore/selective_ki_with_1000_errors_index_fixed.csv')
     df = pd.merge(df, df_o, left_on='SMILES_TARGET', right_on='ORIGINAL')
     print(len(df))
     #df = df.join(df_o)
@@ -37,10 +37,10 @@ if __name__ == "__main__":
     sample_nums = []
 
     df["STD_CORRECT"] = df.apply(
-                lambda row: standardization_pipeline(row["CORRECT"]) if(row["CORRECT"]) else None, axis=1
+                lambda row: standardize_smiles(row["CORRECT"]) if(row["CORRECT"]) else None, axis=1
             )#.dropna()
     df_val = df.dropna(subset=["STD_CORRECT"])
-    with open(f"Data/explore/{error_source.split('/')[2].split('.')[0]}.txt", 'w') as f:
+    with open(f"data/explore/{error_source.split('/')[2].split('.')[0]}.txt", 'w') as f:
             f.write(f'Percentage valid: {len(df_val)/len(df_o) * 100} %\n')
 
     collect_new = False
@@ -55,15 +55,15 @@ if __name__ == "__main__":
         #print(new)
         print(len(new))
         df_new = pd.DataFrame(new, columns =['SMILES'])
-        df_new.to_csv(f"Data/explore/{error_source.split('/')[2].split('.')[0]}_new.csv", index=None)
+        df_new.to_csv(f"data/explore/{error_source.split('/')[2].split('.')[0]}_new.csv", index=None)
 
     print(df['Unnamed: 0'].max())
     for index in range(df['Unnamed: 0'].max()):
         df_i = df_val.loc[df_val['Unnamed: 0'] == index]
 
 
-        df_new = remove_smiles_duplicates(df_i, subset="STD_CORRECT")
-        df_i = remove_smiles_duplicates(df_i, subset="ORIGINAL_SMILES")
+        df_new = df_i.drop_duplicates(subset="STD_CORRECT")
+        df_i = df_i.drop_duplicates(subset="ORIGINAL_SMILES")
 
         original = df_i['ORIGINAL_SMILES'].values.tolist()
         fixed = df_new['STD_CORRECT'].values.tolist()
@@ -87,8 +87,8 @@ if __name__ == "__main__":
             df_s = df_i.sample(i, random_state=42)
             #print(len(df_s))
             df_s = df_s.dropna(subset=["STD_CORRECT"])
-            df_new = remove_smiles_duplicates(df_s, subset="STD_CORRECT")
-            df_s = remove_smiles_duplicates(df_i, subset="ORIGINAL_SMILES")
+            df_new = df_s.drop_duplicates(subset="STD_CORRECT")
+            df_s = df_i.drop_duplicates(subset="ORIGINAL_SMILES")
             original = df_s['ORIGINAL_SMILES'].values.tolist()
             fixed = df_new['STD_CORRECT'].values.tolist()
             new = list(set(fixed) - set(original))
@@ -117,9 +117,9 @@ if __name__ == "__main__":
 
     print(sum(num_fixed))
     print(sum(num_new))
-    with open(f"Data/explore/{error_source.split('/')[2].split('.')[0]}.txt", 'a') as f:
+    with open(f"data/explore/{error_source.split('/')[2].split('.')[0]}.txt", 'a') as f:
             f.write(f'Percentage unique: {sum(num_fixed)/len(df_val) * 100} %\n')
             f.write(f'Percentage novel: {sum(num_new)/len(df_val) * 100} %\n')
 
     # df = pd.DataFrame(news, columns =['SMILES'])
-    # df.to_csv(f"Data/explore/{error_source.split('/')[2].split('.')[0]}_new.csv", index=None)
+    # df.to_csv(f"data/explore/{error_source.split('/')[2].split('.')[0]}_new.csv", index=None)

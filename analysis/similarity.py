@@ -365,8 +365,8 @@ class WassersteinMetric(Metric):
 
 
 if __name__ == "__main__":
-    source = '../Data/'
-    dest = 'KLdiv/'
+    source = '../data/'
+    dest = 'kldiv/'
     name = 'PAPYRUS_200_standardized'
     df = pd.read_csv(f"{source}{name}.csv", usecols=['STD_SMILES'])
     train = df.sample(100000, random_state=42).STD_SMILES.tolist()

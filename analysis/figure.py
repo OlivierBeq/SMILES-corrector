@@ -241,9 +241,9 @@ def figure_1(source_folder : str = 'generated/error_analysis/', names : list = [
     freq(source_folder, df_complete, legend, 'Figure_1', multiple=True)
 
 
-def figure_2(correct_name : str = 'Data/performance/transformer_all_1_PAPYRUS_200_16_3_PAPYRUS_200_correct_S_fixed.csv',
-             incorrect_name : str = 'Data/performance/transformer_all_1_PAPYRUS_200_16_3_PAPYRUS_200_incorrect_S_fixed.csv',
-             original_name : str = 'Data/errors/split/PAPYRUS_200_all_1_errors_dev.csv',
+def figure_2(correct_name : str = 'data/performance/transformer_all_1_PAPYRUS_200_16_3_PAPYRUS_200_correct_S_fixed.csv',
+             incorrect_name : str = 'data/performance/transformer_all_1_PAPYRUS_200_16_3_PAPYRUS_200_incorrect_S_fixed.csv',
+             original_name : str = 'data/errors/split/PAPYRUS_200_all_1_errors_dev.csv',
              cases : list = ['rnn', 'rl', 'gentlr', 'gan_ckpt100_M'],
              legends : list = ['RNN', 'RNN \ntarget-directed', 'VAE', 'GAN']):
     """

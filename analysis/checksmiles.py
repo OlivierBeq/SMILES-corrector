@@ -12,7 +12,7 @@ currentdir = os.path.dirname(
 parentdir = os.path.dirname(currentdir)
 sys.path.insert(0, parentdir)
 
-from src.utils.tokenizer import smi_tokenizer
+from uncorrupt_smiles.utils.tokenizer import smi_tokenizer
 
 parser = argparse.ArgumentParser(description='Process SMILES')
 

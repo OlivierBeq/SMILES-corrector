@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uncorrupt-smiles"
+version = "0.3.0"
+description = "Train and apply Transformer models that translate invalid SMILES back into valid ones."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Linde Schoenmaker" },
+]
+maintainers = [
+    { name = "Olivier J. M. Béquignon", email = "olivier.bequignon.maintainer@gmail.com" },
+]
+keywords = [
+    "smiles",
+    "cheminformatics",
+    "drug-discovery",
+    "deep-learning",
+    "transformer",
+    "molecular-generation",
+    "pytorch",
+    "rdkit",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "torch>=2.4",
+    "rdkit>=2024.3.1",
+    "polars>=1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+analysis = ["pandas", "matplotlib", "seaborn", "tueplots", "jupyter", "scikit-learn"]
+
+[project.urls]
+Homepage = "https://github.com/OlivierBeq/uncorrupt-smiles"
+Repository = "https://github.com/OlivierBeq/uncorrupt-smiles"
+Issues = "https://github.com/OlivierBeq/uncorrupt-smiles/issues"
+
+[project.scripts]
+uncorrupt-smiles = "uncorrupt_smiles.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["uncorrupt_smiles*"]

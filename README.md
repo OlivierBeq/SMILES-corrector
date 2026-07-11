@@ -1,74 +1,240 @@
-# SMILES corrector
-Collection of scripts to create and use SMILES corrector. The SMILES corrector is a transformer model that is trained to translate invalid SMILES sequences to valid SMILES sequences. 
+# 🧬 uncorrupt-smiles
 
-## Installation (with python v 3.9)
-1. RDKit (version >= 2020.03) 
-$ conda install -c conda-forge rdkit
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
-2. Numpy (version >= 1.19)
-$ conda install numpy
+**uncorrupt-smiles** trains and applies Transformer models that translate invalid SMILES
+sequences into valid ones. It is built around three composable, argument-driven building
+blocks — no config files required:
 
-3. Scikit-Learn (version >= 0.23)
-$ conda install scikit-learn
+1. **Generate errors** from any SMILES dataset.
+2. **Train** a corrector model, whatever the hardware.
+3. **Fix** SMILES with a trained model, from the CLI or from Python.
 
-4. Pandas (version >= 1.2.2)
-$ conda install pandas
+Every stage streams its input through [polars](https://pola.rs); no dataset is ever loaded
+fully into memory, so the same commands scale from a laptop GPU to a training cluster.
 
-5. PyTorch (version >= 1.7)
-$ conda install pytorch torchvision cudatoolkit=10.2 -c pytorch 
+## 📦 Installation
 
-6. Matplotlib (version >= 2.0)
-$ conda install matplotlib
+Requires Python 3.11+.
 
-7. TQMD
-$ pip install tqdm
+```bash
+git clone https://github.com/OlivierBeq/uncorrupt-smiles.git
+cd uncorrupt-smiles
+pip install -e .
+```
 
-8. Torchtext
-$ pip install torchtext==0.11.2 
+Optional extras:
 
-9. Modin
-$ pip install modin[ray]
+```bash
+pip install -e ".[analysis]"   # pandas/matplotlib/seaborn for the analysis/ scripts
+pip install -e ".[test]"       # pytest, for running the test suite
+```
 
-10. Chembl structure pipeline
-$ conda install -c conda-forge chembl_structure_pipeline
+Core dependencies — `torch >= 2.4`, `rdkit >= 2024.3.1`, `polars >= 1.0` — are resolved by pip
+to whichever wheel (CPU or CUDA) matches your machine.
 
-11. Seaborn
-$ conda install seaborn
+> **Note:** checkpoints produced by earlier versions of this project (including the archive on
+> [Zenodo](https://zenodo.org/record/7157412#.Y1edr3ZBxD8)) use a different, incompatible
+> checkpoint format and cannot be loaded by `Seq2Seq.load_checkpoint`. Retrain to obtain a
+> checkpoint this version can use.
 
-12. tueplots
-$ pip install tueplots
+## 🚀 Usage
 
-13. jupyer
-$ pip install jupyter
+Every operation is available two ways: as a CLI subcommand, and as a plain Python function or
+model method. Run `uncorrupt-smiles <subcommand> -h` for the full flag list of any subcommand.
 
-## Usage
-There are two main options for using the SMILES corrector; use a previously trained model (step 4) or train a new model.
+### 📥 0. Fetch example data
 
-The files for reuse can be found on: https://zenodo.org/record/7157412#.Y1edr3ZBxD8
+The example datasets and pretrained checkpoint under `data/`, `generated/`, and `rawdata/` are
+not committed to this repository (to keep it small) — they're downloaded on demand from
+[Zenodo](https://zenodo.org/records/7157412) and this repo's release assets, streamed straight
+to disk and checksum-verified.
 
-To train a new model follow example in test.py to perform the following steps
+**CLI**
 
-1. Prepare the molecules that will be used for training
-standardize the molecules using standardize from preprocess.py (this for example removes salts & canonicalizes the SMILES)
-remove molecules with SMILES longer than a set threshold (this is necessary to reduce the number of model parameters)
+```bash
+uncorrupt-smiles fetch-data
+```
 
-2. Introduce ‘artificial’ errors into training molecules, done in order to create invalid-valid pairs (for training & evaluating the model)
-indicate which type of error to introduce using invalid_type = (could for example be all errors (‘all’) or only syntax, ring, parentheses, valence, aromaticity, bond exists & random permutations)
-indicate how many errors to introduce per sequence using num_errors
-introduce the errors using get_invalid_smiles from invalidSMILES.py
-the resulting invalid-valid pairs are saved as training and validation set (& optional test set) (are later used by torchtext dataloader)
+**Python**
 
-3. Train & evaluate model
-indicate where to find real-world error set using error source = (apart from training & evaluating the model on artificial invalid SMILES it will also be evaluated on actual invalid SMILES created by de novo generation)
-use model_training from modelling.py to train the model (this function will initialize a transformer model and train, evaluate and save it)
-the transformer architecture is defined in transformer.py 
-if a trained model already exists the weights from the last epoch (modelname_last) are loaded & existing model is trained further
-evaluation is done using functions from metric.py
-performance & model are saved in Data/performance/
+```python
+from uncorrupt_smiles.fetch_data import fetch_all
 
-4. Use model to correct invalid SMILES
-done using correct_SMILES from modelling.py (best model is saved in Data/performance/[modelname].pkg (!= the modelname ending with _last))
-for an example of how to use the SMILES corrector for exploration see testexplore.py 
+fetch_all()
+```
 
-## Support
-Send a message to l.schoenmaker@lacdr.leidenuniv.nl
+Already-present files are skipped by default (pass `--force`/`force=True` to redownload).
+Use `--only`/`only=[...]` to fetch specific files, e.g.
+`uncorrupt-smiles fetch-data --only rawdata/gbd_8.csv`.
+
+### 🧹 1. Standardize
+
+Canonicalizes SMILES via RDKit. Anything RDKit can't parse — or an empty string — is dropped,
+not silently kept.
+
+**CLI**
+
+```bash
+uncorrupt-smiles standardize \
+  --input-csv rawdata/PAPYRUS.csv --smiles-col SMILES --separator ";" \
+  --output-csv data/papyrus_std.csv --threshold 200
+```
+
+**Python**
+
+```python
+from uncorrupt_smiles.preprocess import standardize_smiles, standardize_stream
+
+standardize_smiles("C(C)O")  # -> "CCO"
+
+standardize_stream(
+    "rawdata/PAPYRUS.csv", smiles_col="SMILES", output_csv="data/papyrus_std.csv",
+    length_threshold=200, separator=";",
+)
+```
+
+`--smiles-col`/`smiles_col` and `--separator`/`separator` are explicit arguments, so this works
+on any CSV — not just PAPYRUS-shaped exports.
+
+### 🧪 2. Generate errors
+
+Introduces synthetic, RDKit-confirmed-invalid corruptions of valid SMILES, for training or
+evaluating a corrector.
+
+**CLI**
+
+```bash
+uncorrupt-smiles generate-errors \
+  --input-csv data/papyrus_std.csv --smiles-col STD_SMILES \
+  --fragment-csv rawdata/gbd_8.csv --fragment-col FRAGMENT \
+  --train-csv data/errors/train.csv --dev-csv data/errors/dev.csv \
+  --invalid-type all --num-errors 1
+```
+
+**Python**
+
+```python
+from uncorrupt_smiles.invalidSMILES import generate_errors, reservoir_sample_fragments, write_errors_split
+
+# stream straight to train/dev CSVs
+write_errors_split(
+    "data/papyrus_std.csv", "STD_SMILES",
+    "rawdata/gbd_8.csv", "FRAGMENT",
+    "data/errors/train.csv", "data/errors/dev.csv",
+    seed=42, invalid_type="all",
+)
+
+# or generate pairs in memory, e.g. for a handful of molecules
+fragments = reservoir_sample_fragments("rawdata/gbd_8.csv", "FRAGMENT", k=20_000, seed=42)
+pairs = list(generate_errors(["CCO", "c1ccccc1"], fragments, seed=42))
+```
+
+`--invalid-type` (`invalid_type`) selects which corruption(s) to introduce: `all`, `multiple`,
+or one of `exists`, `par`, `permut`, `ring`, `syntax`, `valence`, `arom`.
+
+### 🏋️ 3. Train
+
+Training, evaluation, and checkpointing all live as methods on the model itself.
+
+**CLI**
+
+```bash
+uncorrupt-smiles train \
+  --train-csv data/errors/train.csv --dev-csv data/errors/dev.csv \
+  --checkpoint-out data/performance/model.pkg \
+  --hid-dim 128 --n-layers 2 --n-heads 4 --pf-dim 256 --batch-size 32 --epochs 20
+```
+
+**Python**
+
+```python
+from uncorrupt_smiles.data import iter_csv_column, make_loader
+from uncorrupt_smiles.transformer import Seq2Seq
+from uncorrupt_smiles.vocab import Vocab
+
+src_vocab = Vocab.build_from_lines(iter_csv_column("data/errors/train.csv", "ERROR"))
+trg_vocab = Vocab.build_from_lines(iter_csv_column("data/errors/train.csv", "STD_SMILES"))
+
+model = Seq2Seq.build(
+    len(src_vocab), len(trg_vocab), max_length=202, device="cuda",
+    src_pad_idx=src_vocab.pad_idx, trg_pad_idx=trg_vocab.pad_idx,
+    hid_dim=128, n_layers=2, n_heads=4, pf_dim=256,
+)
+
+train_loader = make_loader("data/errors/train.csv", "ERROR", "STD_SMILES", src_vocab, trg_vocab, batch_size=32)
+dev_loader = make_loader("data/errors/dev.csv", "ERROR", "STD_SMILES", src_vocab, trg_vocab, batch_size=32)
+
+model.fit(train_loader, dev_loader, src_vocab, trg_vocab, epochs=20, checkpoint_path="data/performance/model.pkg")
+```
+
+The defaults above are sized for an 8GB GPU. For a full-scale run on more powerful hardware,
+just pass larger values — e.g. `--hid-dim 512 --n-heads 8 --pf-dim 1024 --batch-size 128`
+(or the matching keyword arguments in Python). `--device`/`device` defaults to CUDA if
+available, otherwise CPU. Pass `--resume <checkpoint>` (CLI) or use
+`Seq2Seq.load_checkpoint(...)` (Python) to continue training an existing checkpoint.
+
+### 🩹 4. Fix
+
+**CLI**
+
+```bash
+uncorrupt-smiles fix \
+  --checkpoint data/performance/model.pkg \
+  --input-csv generated/gan_ckpt100.csv --smiles-col SMILES \
+  --output-csv generated/gan_ckpt100_fixed.csv
+```
+
+**Python**
+
+```python
+from uncorrupt_smiles.transformer import Seq2Seq
+
+model, src_vocab, trg_vocab = Seq2Seq.load_checkpoint("data/performance/model.pkg", device="cpu")
+
+# a single SMILES, or a list
+fixed = model.fix_smiles(
+    ["C1=CC=CC=C1(", "CC(=O)Oc1ccccc1C(=O)O"], src_vocab, trg_vocab,
+)
+
+# or stream an entire CSV in and out
+model.fix_smiles_csv(
+    "generated/gan_ckpt100.csv", "SMILES", "generated/gan_ckpt100_fixed.csv",
+    src_vocab, trg_vocab,
+)
+```
+
+`fix_smiles`/`fix_smiles_csv` work with a checkpoint trained by *this* model architecture, or
+any future architecture exposing the same `generate(...)` method — nothing here is
+Transformer-specific beyond `Seq2Seq` itself.
+
+## 🗂️ Package layout
+
+| Module | Purpose |
+|---|---|
+| `src/uncorrupt_smiles/invalidSMILES.py` | Per-SMILES error functions (`exists_error`, `par_error`, `permutation`, `ring_error`, `syntax_error`, `valence_error`, `arom_error`, `introduce_error`) plus streaming orchestration (`generate_errors`, `write_errors_split`, `reservoir_sample_fragments`). |
+| `src/uncorrupt_smiles/preprocess.py` | `standardize_smiles` / `standardize_stream`. |
+| `src/uncorrupt_smiles/vocab.py` | `Vocab` — character-level vocabulary, built by streaming. |
+| `src/uncorrupt_smiles/data.py` | Streaming CSV helpers and the training `IterableDataset`. |
+| `src/uncorrupt_smiles/transformer.py` | The `Seq2Seq` model. Training, evaluation, checkpoint save/load, and `fix_smiles`/`fix_smiles_csv` are all methods on the model itself. |
+| `src/uncorrupt_smiles/cli.py` | The `uncorrupt-smiles` entrypoint. |
+
+## ✅ Testing
+
+```bash
+pip install -e ".[test]"
+pytest
+```
+
+The suite uses small synthetic fixtures and tiny model dimensions — it runs in a few seconds
+and comfortably fits an 8GB-VRAM/modest-CPU machine.
+
+## 🙏 Acknowledgments
+
+uncorrupt-smiles builds on the original SMILES-corrector research and codebase by
+Linde Schoenmaker.
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).
