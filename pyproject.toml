@@ -7,7 +7,7 @@ name = "uncorrupt-smiles"
 dynamic = ["version"]
 description = "Train and apply Transformer models that translate invalid SMILES back into valid ones."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.11"
 authors = [
     { name = "Linde Schoenmaker" },
@@ -28,7 +28,6 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
