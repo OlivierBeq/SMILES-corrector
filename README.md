@@ -30,16 +30,22 @@ memory ([polars](https://pola.rs) streams every CSV in and out).
 Requires Python 3.11+.
 
 ```bash
-git clone https://github.com/OlivierBeq/uncorrupt-smiles.git
-cd uncorrupt-smiles
-pip install -e .
+pip install uncorrupt-smiles
 ```
 
 Optional extras:
 
 ```bash
-pip install -e ".[analysis]"   # pandas/matplotlib/seaborn for the analysis/ scripts
-pip install -e ".[test]"       # pytest, for running the test suite
+pip install "uncorrupt-smiles[analysis]"   # pandas/matplotlib/seaborn for the analysis/ scripts
+pip install "uncorrupt-smiles[test]"       # pytest, for running the test suite
+```
+
+To work from a clone instead (e.g. to run the test suite or modify the source):
+
+```bash
+git clone https://github.com/OlivierBeq/uncorrupt-smiles.git
+cd uncorrupt-smiles
+pip install -e ".[test]"
 ```
 
 Core dependencies — `torch >= 2.4`, `rdkit >= 2024.3.1`, `polars >= 1.0` — are resolved by pip
