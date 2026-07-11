@@ -16,7 +16,7 @@ from rdkit import Chem, RDLogger
 
 from uncorrupt_smiles.data import iter_csv_column
 from uncorrupt_smiles.utils.chem import is_valid_smiles
-from uncorrupt_smiles.utils.sanifix import AdjustAromaticNs
+from uncorrupt_smiles.utils.sanifix import adjust_aromatic_ns
 from uncorrupt_smiles.utils.tokenizer import smi_tokenizer
 
 RDLogger.DisableLog("rdApp.*")
@@ -419,7 +419,7 @@ def arom_error(smiles: str, fragment: str, use_mol: bool = True) -> tuple[str, s
                 pass
     elif random_value < 0.5:
         mol = Chem.rdchem.Mol(core.ToBinary())
-        mol = AdjustAromaticNs(mol)
+        mol = adjust_aromatic_ns(mol)
         try:
             smiles = Chem.MolToSmiles(mol)
         except BaseException:

@@ -79,7 +79,7 @@ def _recursively_modify_ns(
     return res, indices
 
 
-def AdjustAromaticNs(m: Chem.Mol, nitrogen_pattern: str = "[n&D2&H1;r5,r6]") -> Chem.Mol:
+def adjust_aromatic_ns(m: Chem.Mol, nitrogen_pattern: str = "[n&D2&H1;r5,r6]") -> Chem.Mol:
     """Fixes aromatic nitrogen perception so molecules such as ``O=c1ccncc1``
     can be sanitized/aromatized correctly.
 
