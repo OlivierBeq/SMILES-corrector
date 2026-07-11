@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uncorrupt-smiles"
-version = "0.3.0"
+dynamic = ["version"]
 description = "Train and apply Transformer models that translate invalid SMILES back into valid ones."
 readme = "README.md"
 license = { text = "MIT" }
@@ -59,3 +59,6 @@ uncorrupt-smiles = "uncorrupt_smiles.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["uncorrupt_smiles*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "uncorrupt_smiles.__version__" }

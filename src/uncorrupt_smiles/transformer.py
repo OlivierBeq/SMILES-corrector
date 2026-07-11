@@ -177,7 +177,17 @@ class DecoderLayer(nn.Module):
 
 class Seq2Seq(nn.Module):
 
-    def __init__(self, encoder, decoder, src_pad_idx, trg_pad_idx, device, hyperparams: dict):
+    def __init__(
+        self,
+        encoder,
+        decoder,
+        src_pad_idx,
+        trg_pad_idx,
+        device,
+        hyperparams: dict,
+        src_vocab: Vocab | None = None,
+        trg_vocab: Vocab | None = None,
+    ):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -185,6 +195,12 @@ class Seq2Seq(nn.Module):
         self.trg_pad_idx = trg_pad_idx
         self.device = device
         self.hyperparams = hyperparams
+        # The vocab a checkpoint was trained with is not optional configuration - encoding/
+        # decoding with a mismatched vocab silently produces garbage. Carrying it as part of
+        # the model (rather than a value the caller must separately track and pass to every
+        # call) makes that mismatch impossible.
+        self.src_vocab = src_vocab
+        self.trg_vocab = trg_vocab
 
     @classmethod
     def build(
@@ -200,6 +216,8 @@ class Seq2Seq(nn.Module):
         n_heads: int = 4,
         pf_dim: int = 256,
         dropout: float = 0.1,
+        src_vocab: Vocab | None = None,
+        trg_vocab: Vocab | None = None,
     ) -> "Seq2Seq":
         """Small-but-functional defaults sized for an 8GB GPU; a full-scale run just passes
         larger hid_dim/n_layers/n_heads/pf_dim."""
@@ -210,9 +228,17 @@ class Seq2Seq(nn.Module):
             src_pad_idx=src_pad_idx, trg_pad_idx=trg_pad_idx, hid_dim=hid_dim,
             n_layers=n_layers, n_heads=n_heads, pf_dim=pf_dim, dropout=dropout,
         )
-        model = cls(encoder, decoder, src_pad_idx, trg_pad_idx, device, hyperparams)
+        model = cls(encoder, decoder, src_pad_idx, trg_pad_idx, device, hyperparams, src_vocab, trg_vocab)
         model.apply(init_weights)
         return model.to(device)
+
+    def _require_vocab(self) -> tuple[Vocab, Vocab]:
+        if self.src_vocab is None or self.trg_vocab is None:
+            raise ValueError(
+                "this model has no src_vocab/trg_vocab attached - set them via fit(...), "
+                "load_checkpoint(...), or by assigning model.src_vocab/model.trg_vocab directly"
+            )
+        return self.src_vocab, self.trg_vocab
 
     def make_src_mask(self, src):
         # src_mask = [batch size, 1, 1, src len]
@@ -270,7 +296,10 @@ class Seq2Seq(nn.Module):
         """Owns the whole training loop: optimizer, loss, gradient clipping, per-epoch
         validation metrics, and best-checkpoint tracking (checkpoints whenever the
         reconstruction error improves; early-stops after `patience` epochs without
-        improvement if valid_loader is given)."""
+        improvement if valid_loader is given). Attaches src_vocab/trg_vocab to the model
+        itself, since a checkpoint and the vocab it was trained with cannot be separated."""
+        self.src_vocab = src_vocab
+        self.trg_vocab = trg_vocab
         optimizer = optim.Adam(self.parameters(), lr=lr)
         criterion = nn.CrossEntropyLoss(ignore_index=self.trg_pad_idx)
         print(f"training model with {count_parameters(self):,} trainable parameters "
@@ -302,7 +331,7 @@ class Seq2Seq(nn.Module):
             info = f"epoch {epoch + 1}/{epochs} train_loss={train_loss:.4g} time={mins}m{secs}s"
 
             if valid_loader is not None:
-                metrics = self.evaluate(valid_loader, src_vocab, trg_vocab, criterion, max_len)
+                metrics = self.evaluate(valid_loader, criterion, max_len)
                 error = 1 - metrics["reconstruction_rate"]
                 info += (
                     f" valid_loss={metrics['loss']:.4g}"
@@ -315,14 +344,14 @@ class Seq2Seq(nn.Module):
                     best_error = error
                     epochs_since_improve = 0
                     if checkpoint_path is not None:
-                        self.save_checkpoint(checkpoint_path, src_vocab, trg_vocab)
+                        self.save_checkpoint(checkpoint_path)
                 else:
                     epochs_since_improve += 1
             elif train_loss < best_error:
                 best_error = train_loss
                 epochs_since_improve = 0
                 if checkpoint_path is not None:
-                    self.save_checkpoint(checkpoint_path, src_vocab, trg_vocab)
+                    self.save_checkpoint(checkpoint_path)
 
             print(info)
             if valid_loader is not None and epochs_since_improve >= patience:
@@ -332,13 +361,13 @@ class Seq2Seq(nn.Module):
     def evaluate(
         self,
         loader,
-        src_vocab: Vocab,
-        trg_vocab: Vocab,
         criterion: nn.Module | None = None,
         max_len: int | None = None,
     ) -> dict:
         """Runs teacher-forced loss plus free-running generate() over `loader`, returning
-        validity/reconstruction/unchanged rates and target-complexity-of-failures."""
+        validity/reconstruction/unchanged rates and target-complexity-of-failures. Uses the
+        model's own src_vocab/trg_vocab (set by fit() or load_checkpoint())."""
+        src_vocab, trg_vocab = self._require_vocab()
         self.eval()
         if criterion is None:
             criterion = nn.CrossEntropyLoss(ignore_index=self.trg_pad_idx)
@@ -389,13 +418,13 @@ class Seq2Seq(nn.Module):
     def fix_smiles(
         self,
         smiles: str | Iterable[str],
-        src_vocab: Vocab,
-        trg_vocab: Vocab,
         max_len: int | None = None,
         batch_size: int = 64,
     ) -> list[str]:
         """The 'anyone can fix a SMILES' entrypoint. Accepts a single string or any
-        iterable (list, generator). Returns corrected SMILES in input order."""
+        iterable (list, generator). Returns corrected SMILES in input order. Uses the
+        model's own src_vocab/trg_vocab (set by fit() or load_checkpoint())."""
+        src_vocab, trg_vocab = self._require_vocab()
         smiles_list = [smiles] if isinstance(smiles, str) else list(smiles)
         if max_len is None:
             max_len = self.hyperparams["max_length"]
@@ -414,8 +443,6 @@ class Seq2Seq(nn.Module):
         input_csv: str,
         smiles_col: str,
         output_csv: str,
-        src_vocab: Vocab,
-        trg_vocab: Vocab,
         batch_size: int = 64,
         separator: str = ",",
     ) -> None:
@@ -429,16 +456,18 @@ class Seq2Seq(nn.Module):
             for smi in iter_csv_column(input_csv, smiles_col, separator=separator):
                 chunk.append(smi)
                 if len(chunk) >= batch_size:
-                    for orig, fixed in zip(chunk, self.fix_smiles(chunk, src_vocab, trg_vocab, batch_size=batch_size)):
+                    for orig, fixed in zip(chunk, self.fix_smiles(chunk, batch_size=batch_size)):
                         writer.writerow([orig, fixed])
                     chunk = []
             if chunk:
-                for orig, fixed in zip(chunk, self.fix_smiles(chunk, src_vocab, trg_vocab, batch_size=batch_size)):
+                for orig, fixed in zip(chunk, self.fix_smiles(chunk, batch_size=batch_size)):
                     writer.writerow([orig, fixed])
 
-    def save_checkpoint(self, path: str, src_vocab: Vocab, trg_vocab: Vocab) -> None:
+    def save_checkpoint(self, path: str) -> None:
         """Bundles state_dict + architecture hyperparams + vocab into one artifact - a
-        learned/data artifact (like any PyTorch checkpoint), not a hand-authored config file."""
+        learned/data artifact (like any PyTorch checkpoint), not a hand-authored config file.
+        Uses the model's own src_vocab/trg_vocab (set by fit() or load_checkpoint())."""
+        src_vocab, trg_vocab = self._require_vocab()
         torch.save({
             "hyperparams": self.hyperparams,
             "state_dict": self.state_dict(),
@@ -447,11 +476,14 @@ class Seq2Seq(nn.Module):
         }, path)
 
     @classmethod
-    def load_checkpoint(cls, path: str, device) -> tuple["Seq2Seq", Vocab, Vocab]:
+    def load_checkpoint(cls, path: str, device) -> "Seq2Seq":
+        """Reconstructs the model together with the src_vocab/trg_vocab it was trained with -
+        the two cannot be used correctly apart from one another, so they are attached to the
+        returned model rather than handed back separately."""
         checkpoint = torch.load(path, map_location=device, weights_only=True)
         src_vocab = Vocab(checkpoint["src_itos"])
         trg_vocab = Vocab(checkpoint["trg_itos"])
-        model = cls.build(device=device, **checkpoint["hyperparams"])
+        model = cls.build(device=device, src_vocab=src_vocab, trg_vocab=trg_vocab, **checkpoint["hyperparams"])
         model.load_state_dict(checkpoint["state_dict"])
         model.to(device)
-        return model, src_vocab, trg_vocab
+        return model

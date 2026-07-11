@@ -69,9 +69,9 @@ if __name__ == "__main__":
     if correct:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        model, src_vocab, trg_vocab = Seq2Seq.load_checkpoint(checkpoint_path, device)
+        model = Seq2Seq.load_checkpoint(checkpoint_path, device)
         fixed_path = f"data/explore/{error_source.split('/')[2].split('.')[0]}_fixed.csv"
-        model.fix_smiles_csv(error_source, "SMILES", fixed_path, src_vocab, trg_vocab)
+        model.fix_smiles_csv(error_source, "SMILES", fixed_path)
 
     df_new = pd.read_csv(f"data/explore/{error_source.split('/')[2].split('.')[0]}_fixed.csv")
     df_new = df_new[df_new["FIXED"].apply(lambda s: Chem.MolFromSmiles(s) is not None)]

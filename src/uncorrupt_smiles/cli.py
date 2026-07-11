@@ -46,7 +46,8 @@ def cmd_train(args: argparse.Namespace) -> None:
     torch.manual_seed(args.seed)
 
     if args.resume:
-        model, src_vocab, trg_vocab = Seq2Seq.load_checkpoint(args.resume, device)
+        model = Seq2Seq.load_checkpoint(args.resume, device)
+        src_vocab, trg_vocab = model.src_vocab, model.trg_vocab
         print(f"resumed model from {args.resume}: {model.hyperparams}")
     else:
         src_vocab = Vocab.build_from_lines(
@@ -88,10 +89,9 @@ def cmd_fetch_data(args: argparse.Namespace) -> None:
 
 def cmd_fix(args: argparse.Namespace) -> None:
     device = resolve_device(args.device)
-    model, src_vocab, trg_vocab = Seq2Seq.load_checkpoint(args.checkpoint, device)
+    model = Seq2Seq.load_checkpoint(args.checkpoint, device)
     model.fix_smiles_csv(
-        args.input_csv, args.smiles_col, args.output_csv, src_vocab, trg_vocab,
-        batch_size=args.batch_size,
+        args.input_csv, args.smiles_col, args.output_csv, batch_size=args.batch_size,
     )
     print(f"fixed SMILES written to {args.output_csv}")
 

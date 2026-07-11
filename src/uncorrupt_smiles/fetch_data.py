@@ -40,6 +40,9 @@ class Asset:
     md5: str | None = None
 
 
+# The pretrained checkpoint Uncorrupt() loads by default when no checkpoint path is given.
+DEFAULT_CHECKPOINT = "data/performance/transformer_multiple_12_PAPYRUS_200_16_3.pkg"
+
 ASSETS: list[Asset] = [
     Asset("rawdata/gbd_8.csv", _zenodo_url("gbd_8.csv"), "e82cf958f1d22f5b3c0d096aab13b449"),
     Asset("data/selective_ki.csv", _zenodo_url("selective_ki.csv"), "d3998addd8e4472b8d40f231921eda38"),
@@ -61,7 +64,7 @@ ASSETS: list[Asset] = [
     # converted checkpoint (bundled state_dict + hyperparams + vocab), verified bit-for-bit
     # identical in behavior to the original Zenodo weights.
     Asset(
-        "data/performance/transformer_multiple_12_PAPYRUS_200_16_3.pkg",
+        DEFAULT_CHECKPOINT,
         _release_url("transformer_multiple_12_PAPYRUS_200_16_3.pkg"),
         "d413560926b409d0311cd3a93fc6f77d",
     ),

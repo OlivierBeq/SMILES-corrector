@@ -47,7 +47,7 @@ def test_fit_runs_and_loss_is_finite(errors_csv_pair):
         src_pad_idx=src_vocab.pad_idx, trg_pad_idx=trg_vocab.pad_idx, **TINY_KWARGS,
     )
     model.fit(train_loader, dev_loader, src_vocab, trg_vocab, epochs=2, checkpoint_path=None)
-    metrics = model.evaluate(dev_loader, src_vocab, trg_vocab)
+    metrics = model.evaluate(dev_loader)
     assert metrics["loss"] == metrics["loss"]  # not NaN
     assert 0.0 <= metrics["validity_rate"] <= 1.0
 
@@ -59,18 +59,19 @@ def test_checkpoint_round_trip_reproduces_output(errors_csv_pair, tmp_path):
         len(src_vocab), len(trg_vocab), max_length=64, device="cpu",
         src_pad_idx=src_vocab.pad_idx, trg_pad_idx=trg_vocab.pad_idx, **TINY_KWARGS,
     )
+    model.src_vocab, model.trg_vocab = src_vocab, trg_vocab
     ckpt_path = str(tmp_path / "ckpt.pkg")
-    model.save_checkpoint(ckpt_path, src_vocab, trg_vocab)
+    model.save_checkpoint(ckpt_path)
 
-    model2, src_vocab2, trg_vocab2 = Seq2Seq.load_checkpoint(ckpt_path, device="cpu")
-    assert src_vocab2.itos == src_vocab.itos
-    assert trg_vocab2.itos == trg_vocab.itos
+    model2 = Seq2Seq.load_checkpoint(ckpt_path, device="cpu")
+    assert model2.src_vocab.itos == src_vocab.itos
+    assert model2.trg_vocab.itos == trg_vocab.itos
     assert model2.hyperparams == model.hyperparams
 
     model.eval()
     model2.eval()
-    out1 = model.fix_smiles(["CCO"], src_vocab, trg_vocab, max_len=10)
-    out2 = model2.fix_smiles(["CCO"], src_vocab2, trg_vocab2, max_len=10)
+    out1 = model.fix_smiles(["CCO"], max_len=10)
+    out2 = model2.fix_smiles(["CCO"], max_len=10)
     assert out1 == out2
 
 
@@ -81,8 +82,9 @@ def test_fix_smiles_accepts_string_and_list(errors_csv_pair):
         len(src_vocab), len(trg_vocab), max_length=64, device="cpu",
         src_pad_idx=src_vocab.pad_idx, trg_pad_idx=trg_vocab.pad_idx, **TINY_KWARGS,
     )
-    single = model.fix_smiles("CCO", src_vocab, trg_vocab, max_len=10)
-    multi = model.fix_smiles(["CCO", "c1ccccc1"], src_vocab, trg_vocab, max_len=10)
+    model.src_vocab, model.trg_vocab = src_vocab, trg_vocab
+    single = model.fix_smiles("CCO", max_len=10)
+    multi = model.fix_smiles(["CCO", "c1ccccc1"], max_len=10)
     assert isinstance(single, list) and len(single) == 1
     assert isinstance(multi, list) and len(multi) == 2
     assert "<pad>" not in single[0] and "<sos>" not in single[0]
@@ -95,8 +97,9 @@ def test_fix_smiles_csv_writes_one_row_per_input(errors_csv_pair, smiles_csv, tm
         len(src_vocab), len(trg_vocab), max_length=64, device="cpu",
         src_pad_idx=src_vocab.pad_idx, trg_pad_idx=trg_vocab.pad_idx, **TINY_KWARGS,
     )
+    model.src_vocab, model.trg_vocab = src_vocab, trg_vocab
     output_csv = str(tmp_path / "fixed.csv")
-    model.fix_smiles_csv(smiles_csv, "SMILES", output_csv, src_vocab, trg_vocab, batch_size=4)
+    model.fix_smiles_csv(smiles_csv, "SMILES", output_csv, batch_size=4)
 
     import csv as csv_mod
     with open(smiles_csv) as f:
